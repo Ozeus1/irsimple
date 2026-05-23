@@ -30,8 +30,38 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.request import Request, urlopen
 
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, ttk
+except Exception:  # pragma: no cover - servidores web headless podem nao ter tkinter
+    class _MissingTkBase:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("tkinter nao esta instalado. Use a interface web ou instale python3-tk para a interface desktop.")
+
+    class _MissingTk:
+        Misc = object
+        Toplevel = object
+        Tk = _MissingTkBase
+        StringVar = _MissingTkBase
+        IntVar = _MissingTkBase
+
+    class _MissingTtk:
+        Frame = object
+
+        def __getattr__(self, _name: str) -> Any:
+            return _MissingTkBase
+
+    class _MissingDialog:
+        def __getattr__(self, _name: str) -> Any:
+            def _missing(*_args: Any, **_kwargs: Any) -> Any:
+                raise RuntimeError("tkinter nao esta instalado. Instale python3-tk para usar a interface desktop.")
+
+            return _missing
+
+    tk = _MissingTk()  # type: ignore[assignment]
+    ttk = _MissingTtk()  # type: ignore[assignment]
+    filedialog = _MissingDialog()  # type: ignore[assignment]
+    messagebox = _MissingDialog()  # type: ignore[assignment]
 
 try:
     import pandas as pd
