@@ -26,7 +26,7 @@ nano .env
 ```
 
 Configure pelo menos `IRSIMPLE_SECRET_KEY` com uma chave longa.
-Tambem configure `IRSIMPLE_LOGIN_EMAIL` e `IRSIMPLE_PASSWORD_HASH`.
+Tambem configure `IRSIMPLE_LOGIN_EMAIL`. Se `IRSIMPLE_PASSWORD_HASH` ficar vazio, o primeiro acesso usa a senha temporaria de `IRSIMPLE_TEMP_PASSWORD` e direciona para troca de senha.
 
 Para gerar o hash da senha:
 
@@ -38,7 +38,7 @@ python -c "from werkzeug.security import generate_password_hash; import os; prin
 unset IRSIMPLE_PASSWORD
 ```
 
-Copie o resultado para `IRSIMPLE_PASSWORD_HASH` no arquivo `.env`.
+Copie o resultado para `IRSIMPLE_PASSWORD_HASH` no arquivo `.env`, ou deixe vazio e altere a senha pela tela web no primeiro acesso.
 
 ## Execucao manual na VPS
 

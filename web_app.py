@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from flask import Flask, Response, flash, redirect, render_template, request, send_file, session, url_for
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 import irsimple_app as core
@@ -36,6 +36,7 @@ app.secret_key = SECRET_KEY
 
 LOGIN_EMAIL = os.environ.get("IRSIMPLE_LOGIN_EMAIL", "orlei1@yahoo.com").strip().lower()
 PASSWORD_HASH = os.environ.get("IRSIMPLE_PASSWORD_HASH", "").strip()
+TEMP_PASSWORD = os.environ.get("IRSIMPLE_TEMP_PASSWORD", "irsimple@2026")
 
 
 @app.template_filter("basename")
@@ -97,6 +98,40 @@ def fmt_dec(value: Any) -> str:
 def db_rows(sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
     with core.db_connect() as conn:
         return conn.execute(sql, params).fetchall()
+
+
+def password_hash_from_db() -> str:
+    try:
+        user_id = core.get_user_id(LOGIN_EMAIL)
+        rows = db_rows("SELECT value FROM app_config WHERE user_id = ? AND key = 'login_password_hash'", (user_id,))
+        return str(rows[0]["value"] or "") if rows else ""
+    except Exception:
+        return ""
+
+
+def configured_password_hash() -> str:
+    return password_hash_from_db() or PASSWORD_HASH
+
+
+def verify_login_password(password: str) -> bool:
+    stored_hash = configured_password_hash()
+    if stored_hash:
+        return check_password_hash(stored_hash, password)
+    return password == TEMP_PASSWORD
+
+
+def using_temporary_password() -> bool:
+    return not bool(configured_password_hash())
+
+
+def save_login_password(password: str) -> None:
+    user_id = core.get_user_id(LOGIN_EMAIL)
+    password_hash = generate_password_hash(password)
+    with core.db_connect() as conn:
+        conn.execute(
+            "INSERT INTO app_config (user_id, key, value) VALUES (?, 'login_password_hash', ?) ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+            (user_id, password_hash),
+        )
 
 
 def save_uploaded_file(field_name: str, subfolder: str = "") -> Path | None:
@@ -1105,16 +1140,16 @@ def index() -> str | Response:
     if request.method == "POST":
         username = request.form.get("username", "").strip().lower()
         password = request.form.get("password", "")
-        if not PASSWORD_HASH:
-            flash("Login ainda nao configurado. Defina IRSIMPLE_PASSWORD_HASH no arquivo .env.", "danger")
-            return render_template("login.html", login_email=LOGIN_EMAIL)
-        if username != LOGIN_EMAIL or not check_password_hash(PASSWORD_HASH, password):
+        if username != LOGIN_EMAIL or not verify_login_password(password):
             flash("Usuario ou senha invalidos.", "danger")
             return render_template("login.html", login_email=username or LOGIN_EMAIL)
         session.clear()
         session["authenticated"] = True
         session["username"] = LOGIN_EMAIL
         core.get_user_id(LOGIN_EMAIL)
+        if using_temporary_password():
+            flash("Acesso feito com senha temporaria. Cadastre uma nova senha.", "warning")
+            return redirect(url_for("change_password"))
         flash(f"Usuario autenticado: {LOGIN_EMAIL}", "success")
         next_url = request.args.get("next") or url_for("dashboard")
         return redirect(next_url if next_url.startswith("/") and not next_url.startswith("//") else url_for("dashboard"))
@@ -1126,6 +1161,26 @@ def logout() -> Response:
     session.clear()
     flash("Sessao encerrada.", "success")
     return redirect(url_for("index"))
+
+
+@app.route("/senha", methods=["GET", "POST"])
+@login_required
+def change_password() -> str | Response:
+    if request.method == "POST":
+        current = request.form.get("current_password", "")
+        new = request.form.get("new_password", "")
+        confirm = request.form.get("confirm_password", "")
+        if not verify_login_password(current):
+            flash("Senha atual invalida.", "danger")
+        elif len(new) < 8:
+            flash("A nova senha deve ter pelo menos 8 caracteres.", "warning")
+        elif new != confirm:
+            flash("A confirmacao da senha nao confere.", "warning")
+        else:
+            save_login_password(new)
+            flash("Senha alterada com sucesso.", "success")
+            return redirect(url_for("dashboard"))
+    return render_template("change_password.html", temporary=using_temporary_password())
 
 
 @app.route("/dashboard")

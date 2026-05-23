@@ -14,6 +14,7 @@
       <div class="session-tools">
         <span class="user-pill">Usuario: {{ username }}</span>
         {% if session.get("authenticated") %}
+        <a class="logout-button" href="{{ url_for('change_password') }}">Senha</a>
         <form method="post" action="{{ url_for('logout') }}">
           <button type="submit" class="logout-button">Sair</button>
         </form>
