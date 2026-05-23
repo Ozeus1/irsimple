@@ -15,10 +15,12 @@ import sqlite3
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from flask import Flask, Response, flash, redirect, render_template, request, send_file, session, url_for
+from werkzeug.security import check_password_hash
 from werkzeug.utils import secure_filename
 
 import irsimple_app as core
@@ -30,6 +32,10 @@ SECRET_KEY = os.environ.get("IRSIMPLE_SECRET_KEY", "dev-change-me")
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
+
+
+LOGIN_EMAIL = os.environ.get("IRSIMPLE_LOGIN_EMAIL", "orlei1@yahoo.com").strip().lower()
+PASSWORD_HASH = os.environ.get("IRSIMPLE_PASSWORD_HASH", "").strip()
 
 
 @app.template_filter("basename")
@@ -44,8 +50,22 @@ def date_input_filter(value: Any) -> str:
 
 
 def current_username() -> str:
-    username = session.get("username") or core.DEFAULT_USER
-    return str(username).strip() or core.DEFAULT_USER
+    username = session.get("username") or LOGIN_EMAIL or core.DEFAULT_USER
+    return str(username).strip().lower() or core.DEFAULT_USER
+
+
+def is_authenticated() -> bool:
+    return bool(session.get("authenticated") and str(session.get("username", "")).lower() == LOGIN_EMAIL)
+
+
+def login_required(view: Callable[..., Any]) -> Callable[..., Any]:
+    @wraps(view)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        if not is_authenticated():
+            return redirect(url_for("index", next=request.full_path if request.query_string else request.path))
+        return view(*args, **kwargs)
+
+    return wrapped
 
 
 def current_user_id() -> int:
@@ -1083,15 +1103,33 @@ def inject_helpers() -> dict[str, Any]:
 @app.route("/", methods=["GET", "POST"])
 def index() -> str | Response:
     if request.method == "POST":
-        username = request.form.get("username", "").strip() or core.DEFAULT_USER
-        session["username"] = username
-        core.get_user_id(username)
-        flash(f"Usuario ativo: {username}", "success")
-        return redirect(url_for("dashboard"))
-    return render_template("login.html")
+        username = request.form.get("username", "").strip().lower()
+        password = request.form.get("password", "")
+        if not PASSWORD_HASH:
+            flash("Login ainda nao configurado. Defina IRSIMPLE_PASSWORD_HASH no arquivo .env.", "danger")
+            return render_template("login.html", login_email=LOGIN_EMAIL)
+        if username != LOGIN_EMAIL or not check_password_hash(PASSWORD_HASH, password):
+            flash("Usuario ou senha invalidos.", "danger")
+            return render_template("login.html", login_email=username or LOGIN_EMAIL)
+        session.clear()
+        session["authenticated"] = True
+        session["username"] = LOGIN_EMAIL
+        core.get_user_id(LOGIN_EMAIL)
+        flash(f"Usuario autenticado: {LOGIN_EMAIL}", "success")
+        next_url = request.args.get("next") or url_for("dashboard")
+        return redirect(next_url if next_url.startswith("/") and not next_url.startswith("//") else url_for("dashboard"))
+    return render_template("login.html", login_email=LOGIN_EMAIL)
+
+
+@app.route("/logout", methods=["POST"])
+def logout() -> Response:
+    session.clear()
+    flash("Sessao encerrada.", "success")
+    return redirect(url_for("index"))
 
 
 @app.route("/dashboard")
+@login_required
 def dashboard() -> str:
     cfg = app_config()
     trade_count = db_rows("SELECT count(*) AS n FROM trades WHERE user_id = ?", (current_user_id(),))[0]["n"]
@@ -1110,6 +1148,7 @@ def dashboard() -> str:
 
 
 @app.route("/config", methods=["POST"])
+@login_required
 def update_config() -> Response:
     save_app_config(
         {
@@ -1128,6 +1167,7 @@ def update_config() -> Response:
 
 
 @app.route("/importar", methods=["POST"])
+@login_required
 def importar() -> Response:
     neg = save_uploaded_file("negociacao", "b3")
     mov = save_uploaded_file("movimentacao", "b3")
@@ -1150,6 +1190,7 @@ def importar() -> Response:
 
 
 @app.route("/notas", methods=["GET", "POST"])
+@login_required
 def notas() -> str | Response:
     if request.method == "POST":
         files = request.files.getlist("notas")
@@ -1177,6 +1218,7 @@ def notas() -> str | Response:
 
 
 @app.route("/notas/<int:note_id>/download")
+@login_required
 def download_nota(note_id: int) -> Response:
     rows = db_rows(
         "SELECT source_file FROM brokerage_note_taxes WHERE user_id = ? AND id = ?",
@@ -1193,6 +1235,7 @@ def download_nota(note_id: int) -> Response:
 
 
 @app.route("/manual", methods=["GET", "POST"])
+@login_required
 def manual() -> str | Response:
     if request.method == "POST":
         kind = request.form.get("kind")
@@ -1228,6 +1271,7 @@ def manual() -> str | Response:
 
 
 @app.route("/manual/delete/<table>/<int:item_id>", methods=["POST"])
+@login_required
 def delete_manual(table: str, item_id: int) -> Response:
     sql_table = "manual_positions" if table == "positions" else "manual_events"
     with core.db_connect() as conn:
@@ -1237,6 +1281,7 @@ def delete_manual(table: str, item_id: int) -> Response:
 
 
 @app.route("/calculo")
+@login_required
 def calculo() -> str:
     results = require_results()
     year = int(request.args.get("year") or selected_year(results))
@@ -1254,6 +1299,7 @@ def calculo() -> str:
 
 
 @app.route("/detalhe")
+@login_required
 def detalhe() -> str | Response:
     results = require_results()
     if not results:
@@ -1284,6 +1330,7 @@ def detalhe() -> str | Response:
 
 
 @app.route("/anual")
+@login_required
 def anual() -> str:
     results = require_results()
     year = int(request.args.get("year") or selected_year(results))
@@ -1292,6 +1339,7 @@ def anual() -> str:
 
 
 @app.route("/historico")
+@login_required
 def historico() -> str:
     results = require_results()
     rows = []
@@ -1303,6 +1351,7 @@ def historico() -> str:
 
 
 @app.route("/carteira")
+@login_required
 def carteira() -> str:
     results = require_results()
     year = int(request.args.get("year") or selected_year(results))
@@ -1329,6 +1378,7 @@ def carteira() -> str:
 
 
 @app.route("/opcoes", methods=["GET", "POST"])
+@login_required
 def opcoes() -> str | Response:
     if request.method == "POST":
         row = {
@@ -1355,6 +1405,7 @@ def opcoes() -> str | Response:
 
 
 @app.route("/patrimonio")
+@login_required
 def patrimonio() -> str:
     results = require_results()
     mode = request.args.get("mode", "anual")
@@ -1365,6 +1416,7 @@ def patrimonio() -> str:
 
 
 @app.route("/consolidado", methods=["GET", "POST"])
+@login_required
 def consolidado() -> str | Response:
     if request.method == "POST":
         files = request.files.getlist("relatorios")
@@ -1387,6 +1439,7 @@ def consolidado() -> str | Response:
 
 
 @app.route("/conferencia-b3")
+@login_required
 def conferencia_b3() -> str:
     results = require_results()
     rows = []
@@ -1411,6 +1464,7 @@ def conferencia_b3() -> str:
 
 
 @app.route("/export/excel")
+@login_required
 def export_excel() -> Response:
     if core.Workbook is None:
         flash("openpyxl nao esta instalado.", "danger")
@@ -1435,6 +1489,7 @@ def export_excel() -> Response:
 
 
 @app.route("/export/pdf")
+@login_required
 def export_pdf() -> Response:
     if core.SimpleDocTemplate is None:
         flash("reportlab nao esta instalado.", "danger")

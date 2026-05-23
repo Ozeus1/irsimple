@@ -11,7 +11,14 @@
   <header class="topbar">
     <div class="brand-row">
       <a class="brand" href="{{ url_for('dashboard') }}">IRSimple Web</a>
-      <span class="user-pill">Usuario: {{ username }}</span>
+      <div class="session-tools">
+        <span class="user-pill">Usuario: {{ username }}</span>
+        {% if session.get("authenticated") %}
+        <form method="post" action="{{ url_for('logout') }}">
+          <button type="submit" class="logout-button">Sair</button>
+        </form>
+        {% endif %}
+      </div>
     </div>
     <nav>
       <a class="{{ 'active' if request.endpoint == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}">Inicio</a>

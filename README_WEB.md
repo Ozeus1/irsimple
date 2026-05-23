@@ -26,6 +26,19 @@ nano .env
 ```
 
 Configure pelo menos `IRSIMPLE_SECRET_KEY` com uma chave longa.
+Tambem configure `IRSIMPLE_LOGIN_EMAIL` e `IRSIMPLE_PASSWORD_HASH`.
+
+Para gerar o hash da senha:
+
+```bash
+cd /opt/irsimple
+source .venv/bin/activate
+read -s IRSIMPLE_PASSWORD
+python -c "from werkzeug.security import generate_password_hash; import os; print(generate_password_hash(os.environ['IRSIMPLE_PASSWORD']))"
+unset IRSIMPLE_PASSWORD
+```
+
+Copie o resultado para `IRSIMPLE_PASSWORD_HASH` no arquivo `.env`.
 
 ## Execucao manual na VPS
 
@@ -71,7 +84,26 @@ sudo certbot --nginx -d ir.casatemporadaceara.cloud
 - Uploads ficam em `web_uploads/<usuario>/`.
 - Para producao, proteja `irsimple.db` e `web_uploads/` com backup e permissoes restritas.
 - Recomenda-se backup diario de `irsimple.db` e `web_uploads/`.
-- O login atual isola dados por nome de usuario, mas ainda nao possui senha. Antes de abrir ao publico, inclua autenticacao com senha.
+- O acesso web exige `IRSIMPLE_LOGIN_EMAIL` e `IRSIMPLE_PASSWORD_HASH` no `.env`.
+
+## Migracao de dados locais para VPS
+
+Os dados financeiros nao devem ser enviados ao GitHub. Exporte localmente e copie por SSH:
+
+```powershell
+python scripts/sync_user_data.py export --user local --output private_export/irsimple_user_seed.json
+scp private_export/irsimple_user_seed.json root@SEU_IP:/opt/irsimple/private_seed.json
+```
+
+Na VPS:
+
+```bash
+cd /opt/irsimple
+sudo systemctl stop irsimple
+sudo -u www-data .venv/bin/python scripts/sync_user_data.py import --user orlei1@yahoo.com --input /opt/irsimple/private_seed.json
+sudo chown www-data:www-data irsimple.db
+sudo systemctl start irsimple
+```
 
 ## Publicacao no GitHub
 
