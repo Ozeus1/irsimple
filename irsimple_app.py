@@ -59,6 +59,14 @@ try:
 except Exception:  # pragma: no cover - dependencia local
     SimpleDocTemplate = None
 
+try:
+    from pypdf import PdfReader
+except Exception:  # pragma: no cover - dependencia local
+    try:
+        from PyPDF2 import PdfReader
+    except Exception:  # pragma: no cover - dependencia local
+        PdfReader = None
+
 
 APP_TITLE = "IRSimple - IRPF Bolsa"
 BASE_DIR = Path(__file__).resolve().parent
@@ -70,7 +78,11 @@ DEFAULT_USER = os.environ.get("IRSIMPLE_USER", "local").strip() or "local"
 CNPJ_STOCKS_URL = "https://www.idinheiro.com.br/investimentos/cnpj-empresas-listadas-b3/"
 CNPJ_FIIS_URL = "https://www.empiricus.com.br/explica/cnpj-fundos-imobiliarios-fiis-listados-b3-declaracao-imposto-de-renda/"
 CNPJ_ETFS_URL = "https://maisretorno.com/lista-etf"
+BCB_SGS_URL = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.{code}/dados"
+YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%5EBVSP"
 CNPJ_RE = re.compile(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}")
+KNOWN_FII_TICKERS = {"ITIT11"}
+KNOWN_ETF_TICKERS = {"BOVA11", "BOVV11", "HASH11", "GOLD11", "IVVB11", "LFTS11"}
 MONTHS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 MONTH_NAME_TO_NUMBER = {
     "janeiro": 1,
@@ -118,6 +130,83 @@ def fetch_url_text(url: str) -> str:
     req = Request(url, headers={"User-Agent": "Mozilla/5.0 IRSimple/1.0"})
     with urlopen(req, timeout=40) as response:
         return response.read().decode("utf-8", errors="ignore")
+
+
+def fetch_json_url(url: str, params: dict[str, Any] | None = None) -> Any:
+    if requests is not None:
+        response = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0 IRSimple/1.0"}, timeout=40)
+        response.raise_for_status()
+        return response.json()
+    if params:
+        query = "&".join(f"{key}={value}" for key, value in params.items())
+        url = f"{url}?{query}"
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0 IRSimple/1.0"})
+    with urlopen(req, timeout=40) as response:
+        return json.loads(response.read().decode("utf-8", errors="ignore"))
+
+
+def month_key(dt: date) -> str:
+    return f"{dt.year}-{dt.month:02d}"
+
+
+def parse_month_key(period: str) -> tuple[int, int] | None:
+    match = re.fullmatch(r"(\d{4})(?:-(\d{2}))?", str(period))
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2) or "12")
+
+
+def add_months(year: int, month: int, offset: int) -> tuple[int, int]:
+    value = year * 12 + month - 1 + offset
+    return value // 12, value % 12 + 1
+
+
+def iter_month_keys(start_year: int, start_month: int, end_year: int, end_month: int) -> list[str]:
+    keys: list[str] = []
+    year, month = start_year, start_month
+    while (year, month) <= (end_year, end_month):
+        keys.append(f"{year}-{month:02d}")
+        year, month = add_months(year, month, 1)
+    return keys
+
+
+def fetch_bcb_monthly_percent(code: int, start: date, end: date) -> dict[str, Decimal]:
+    data = fetch_json_url(
+        BCB_SGS_URL.format(code=code),
+        {
+            "formato": "json",
+            "dataInicial": start.strftime("%d/%m/%Y"),
+            "dataFinal": end.strftime("%d/%m/%Y"),
+        },
+    )
+    values: dict[str, Decimal] = {}
+    for item in data or []:
+        dt = parse_date(item.get("data"))
+        if dt is None:
+            continue
+        key = month_key(dt)
+        if key not in values or dt.day == 1:
+            values[key] = money(item.get("valor"))
+    return values
+
+
+def fetch_ibovespa_monthly_close(start: date, end: date) -> dict[str, Decimal]:
+    period1 = int(datetime(start.year, start.month, start.day).timestamp())
+    period2 = int(datetime(end.year, end.month, end.day, 23, 59, 59).timestamp())
+    data = fetch_json_url(YAHOO_CHART_URL, {"period1": period1, "period2": period2, "interval": "1mo"})
+    result = ((data or {}).get("chart") or {}).get("result") or []
+    if not result:
+        return {}
+    payload = result[0]
+    timestamps = payload.get("timestamp") or []
+    closes = (((payload.get("indicators") or {}).get("quote") or [{}])[0]).get("close") or []
+    values: dict[str, Decimal] = {}
+    for ts, close in zip(timestamps, closes):
+        if close is None:
+            continue
+        dt = datetime.fromtimestamp(int(ts)).date()
+        values[month_key(dt)] = q2(close)
+    return values
 
 
 def parse_asset_cnpj_sources() -> list[dict[str, str]]:
@@ -239,6 +328,212 @@ def fmt_sheet_cell(value: Any) -> str:
             return str(int(value))
         return str(Decimal(str(value)).normalize()).replace(".", ",")
     return str(value)
+
+
+MONEY_RE = r"\d{1,3}(?:\.\d{3})*,\d{2}"
+NOTE_MONEY_RE = r"-?\s*(?:R\$\s*)?\d{1,3}(?:\.\d{3})*,\d{2}"
+NOTE_PRICE_RE = r"\d{1,3}(?:\.\d{3})*,\d{2,4}"
+
+
+def note_money(value: Any) -> Decimal:
+    text = str(value or "").replace("R$", "").replace(" ", "")
+    return q2(abs(money(text)))
+
+
+def note_money_values(text: str) -> list[Decimal]:
+    return [note_money(value) for value in re.findall(NOTE_MONEY_RE, text or "")]
+
+
+def note_price(value: Any) -> Decimal:
+    text = str(value or "").replace("R$", "").replace(" ", "")
+    return money(text)
+
+
+def extract_first_money_before(text: str, marker: str) -> Decimal:
+    idx = text.find(marker)
+    if idx < 0:
+        return Decimal("0")
+    values = note_money_values(text[max(0, idx - 140):idx])
+    return values[-2] if len(values) >= 2 else values[-1] if values else Decimal("0")
+
+
+def parse_note_header(text: str, path: Path, page_idx: int) -> tuple[str, date | None]:
+    if "COMPROVANTE BOVESPA" in text.upper():
+        date_match = re.search(r"(\d{2}/\d{2}/\d{4})\s*Data de refer", text, re.I)
+        note_match = re.search(r"Comprovante\s+(\d{3,12})", text, re.I)
+        return (note_match.group(1) if note_match else f"{path.stem}-{page_idx}", parse_date(date_match.group(1)) if date_match else None)
+    dates = [parse_date(value) for value in re.findall(r"\d{2}/\d{2}/\d{4}", text)]
+    dates = [value for value in dates if value is not None]
+    trade_date = dates[0] if dates else None
+    note_number = ""
+    for pattern in [
+        r"Nr\.?\s*[Nn]ota\s*(?:\d+\s+)?(\d{4,12})",
+        r"NOTA DE CORRETAGEM\s+(\d{4,12})",
+        r"\b(\d{4,12})\s+(?:GENIAL|CM CAPITAL|C\.N\.P\.J|Data preg)",
+    ]:
+        match = re.search(pattern, text, re.I)
+        if match:
+            note_number = match.group(1).replace(".", "")
+            break
+    if not note_number and trade_date:
+        date_pos = text.find(trade_date.strftime("%d/%m/%Y"))
+        tail = text[date_pos + 10: date_pos + 48] if date_pos >= 0 else ""
+        match = re.search(r"(\d{4,12})", tail)
+        if match:
+            note_number = match.group(1)
+    return note_number or f"{path.stem}-{page_idx}", trade_date
+
+
+def parse_irrf_common(text: str) -> tuple[Decimal, Decimal]:
+    value = Decimal("0")
+    base = Decimal("0")
+
+    match = re.search(rf"I\.?\s*R\.?\s*R\.?\s*F\.?\s*s/\s*opera\S*,?\s*base\s*R\$\s*({MONEY_RE})\s*({MONEY_RE})?", text, re.I)
+    if match:
+        base = note_money(match.group(1))
+        value = note_money(match.group(2)) if match.group(2) else extract_first_money_before(text, match.group(0))
+
+    toro_value = re.search(rf"IRRF\s+Opera\S*\s+Comum\s*(?:R\$)?\s*({NOTE_MONEY_RE})", text, re.I)
+    toro_base = re.search(rf"IRRF\s+Opera\S*\s+Comum:\s*Base\s*({NOTE_MONEY_RE})", text, re.I)
+    toro_projection = re.search(
+        rf"IRRF\s+Opera\S*\s+Comum:\s*Base\s*{NOTE_MONEY_RE}\s*Proje\S*\s*({NOTE_MONEY_RE})",
+        text,
+        re.I,
+    )
+    if toro_base:
+        base = note_money(toro_base.group(1))
+    if toro_value:
+        value = note_money(toro_value.group(1))
+    if value == 0 and toro_projection:
+        value = note_money(toro_projection.group(1))
+
+    return q2(value), q2(base)
+
+
+def parse_irrf_daytrade(text: str) -> Decimal:
+    toro_projection = re.search(
+        rf"IRRF\s+Day[- ]?Trade:\s*Base\s*{NOTE_MONEY_RE}\s*Proje\S*\s*({NOTE_MONEY_RE})",
+        text,
+        re.I,
+    )
+    toro_match = re.search(rf"IRRF\s+Day[- ]?Trade\s*(?:R\$)?\s*({NOTE_MONEY_RE})", text, re.I)
+    if toro_match:
+        value = note_money(toro_match.group(1))
+        if value > 0:
+            return q2(value)
+        if toro_projection:
+            return q2(note_money(toro_projection.group(1)))
+    label = re.search(r"IRRF\s+IRRF\s+Day Trade", text, re.I)
+    if label:
+        values = note_money_values(text[label.end(): label.end() + 180])
+        if len(values) >= 2:
+            return q2(values[1])
+    label = re.search(r"(?:I\.?\s*R\.?\s*R\.?\s*F\.?|IRRF)\s+Day[- ]?Trade\s*\([^)]*Proje", text, re.I)
+    if label:
+        values = note_money_values(text[label.end(): label.end() + 180])
+        if values:
+            return q2(values[0])
+    if toro_projection:
+        return q2(note_money(toro_projection.group(1)))
+    return Decimal("0")
+
+
+def add_brokerage_summary_from_labels(text: str, summary: defaultdict[str, Decimal]) -> None:
+    label_map = [
+        ("buy_normal", r"Compras à vista\s*(?:R\$)?\s*(" + MONEY_RE + ")"),
+        ("sell_normal", r"Vendas à vista\s*(?:R\$)?\s*(" + MONEY_RE + ")"),
+        ("buy_options", r"Opções\s*-\s*Compras\s*(" + MONEY_RE + ")"),
+        ("sell_options", r"Opções\s*-\s*Vendas\s*(" + MONEY_RE + ")"),
+    ]
+    for key, pattern in label_map:
+        match = re.search(pattern, text, re.I)
+        if match and summary[key] == 0:
+            summary[key] = money(match.group(1))
+
+
+def parse_brokerage_note_pdfs(paths: list[Path]) -> list[dict[str, Any]]:
+    if PdfReader is None:
+        raise RuntimeError("Instale pypdf ou PyPDF2 para importar notas de corretagem em PDF.")
+    notes: list[dict[str, Any]] = []
+    for path in paths:
+        reader = PdfReader(str(path))
+        for page_idx, page in enumerate(reader.pages, start=1):
+            text = page.extract_text() or ""
+            text_upper = text.upper()
+            if "NOTA DE CORRETAGEM" not in text_upper and "COMPROVANTE BOVESPA" not in text_upper:
+                continue
+            note_number, trade_date = parse_note_header(text, path, page_idx)
+            if trade_date is None:
+                continue
+            broker_match = re.search(r"\n([A-Z0-9 .&/-]+(?:CTVM|DTVM|CORRETORA|INVESTIMENTOS)[A-Z0-9 .&/-]*)\n", text, re.I)
+            broker = broker_match.group(1).strip() if broker_match else ""
+            irrf_common_total, irrf_base = parse_irrf_common(text)
+            if "COMPROVANTE BOVESPA" in text_upper:
+                common_value_match = re.search(rf"IRRF Operação Comum\s*R\$\s*({MONEY_RE})", text, re.I)
+                common_base_match = re.search(rf"IRRF Operação Comum:\s*Base\s*R\$\s*({MONEY_RE})", text, re.I)
+                irrf_common_total = money(common_value_match.group(1)) if common_value_match else irrf_common_total
+                irrf_base = money(common_base_match.group(1)) if common_base_match else irrf_base
+            if "COMPROVANTE BOVESPA" in text_upper:
+                common_projection_match = re.search(
+                    rf"IRRF\s+Opera\S*\s+Comum:\s*Base\s*{NOTE_MONEY_RE}\s*Proje\S*\s*({NOTE_MONEY_RE})",
+                    text,
+                    re.I,
+                )
+                if irrf_common_total == 0 and common_projection_match:
+                    irrf_common_total = note_money(common_projection_match.group(1))
+            irrf_daytrade = parse_irrf_daytrade(text)
+            sold_fii = Decimal("0")
+            sold_other = Decimal("0")
+            summary = defaultdict(Decimal)
+            for line in text.splitlines():
+                if not line.startswith("1-BOVESPA ") and not line.strip() in {"COMPRA", "VENDA"}:
+                    continue
+                parts = line.split()
+                if len(parts) < 8:
+                    continue
+                value = money(parts[-2])
+                code = ""
+                for token in parts[3:-3]:
+                    if re.fullmatch(r"[A-Z]{4,5}\d{1,4}[A-Z0-9]*", token):
+                        code = normalize_ticker(token)
+                category = classify_asset(code, line)
+                bucket = "fii" if category == "fii" or (code.endswith("11") and category not in {"etf", "opcoes", "futuro"}) else "options" if category == "opcoes" else "normal"
+                side_key = "buy" if parts[1] == "C" else "sell" if parts[1] == "V" else ""
+                if side_key:
+                    summary[f"{side_key}_{bucket}"] += value
+                    if side_key == "sell":
+                        if bucket == "fii":
+                            sold_fii += value
+                        else:
+                            sold_other += value
+            add_brokerage_summary_from_labels(text, summary)
+            total_sold = sold_fii + sold_other
+            if total_sold > 0 and irrf_common_total > 0:
+                irrf_fii = q2(irrf_common_total * sold_fii / total_sold)
+                irrf_common = q2(irrf_common_total - irrf_fii)
+            else:
+                irrf_fii = Decimal("0")
+                irrf_common = irrf_common_total
+            notes.append(
+                {
+                    "note_number": note_number,
+                    "trade_date": trade_date,
+                    "broker": broker,
+                    "source_file": str(path),
+                    "page": page_idx,
+                    "irrf_common": q2(irrf_common),
+                    "irrf_daytrade": q2(irrf_daytrade),
+                    "irrf_fii": q2(irrf_fii),
+                    "irrf_base": q2(irrf_base),
+                    "buy_normal": q2(summary["buy_normal"]),
+                    "sell_normal": q2(summary["sell_normal"]),
+                    "buy_fii": q2(summary["buy_fii"]),
+                    "sell_fii": q2(summary["sell_fii"]),
+                    "buy_options": q2(summary["buy_options"]),
+                    "sell_options": q2(summary["sell_options"]),
+                }
+            )
+    return notes
 
 
 def read_consolidated_sheets(path: Path) -> list[dict[str, Any]]:
@@ -389,8 +684,34 @@ def init_db() -> None:
                 UNIQUE(user_id, ticker),
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
+            CREATE TABLE IF NOT EXISTS brokerage_note_taxes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                note_number TEXT,
+                trade_date TEXT NOT NULL,
+                broker TEXT,
+                source_file TEXT,
+                page INTEGER,
+                irrf_common TEXT,
+                irrf_daytrade TEXT,
+                irrf_fii TEXT,
+                irrf_base TEXT,
+                buy_normal TEXT,
+                sell_normal TEXT,
+                buy_fii TEXT,
+                sell_fii TEXT,
+                buy_options TEXT,
+                sell_options TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, note_number, trade_date, source_file, page),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
             """
         )
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(brokerage_note_taxes)").fetchall()}
+        for column in ["buy_normal", "sell_normal", "buy_fii", "sell_fii", "buy_options", "sell_options"]:
+            if column not in existing:
+                conn.execute(f"ALTER TABLE brokerage_note_taxes ADD COLUMN {column} TEXT")
         conn.execute("INSERT OR IGNORE INTO users (username) VALUES (?)", (DEFAULT_USER,))
 
 
@@ -458,6 +779,9 @@ def parse_date(value: Any) -> date | None:
     if isinstance(value, date):
         return value
     text = str(value).strip()
+    digits = re.sub(r"\D", "", text)
+    if re.fullmatch(r"\d{8}", text):
+        text = f"{digits[:2]}/{digits[2:4]}/{digits[4:]}"
     for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
         try:
             return datetime.strptime(text[:10], fmt).date()
@@ -517,13 +841,21 @@ def classify_asset(code: str, market: str = "", product: str = "") -> str:
         return "opcoes"
     if "FUTURO" in text or re.fullmatch(r"(WIN|IND|WDO|DOL)[FGHJKMNQUVXZ]\d{2}", code):
         return "futuro"
-    if "ETF" in norm_text or code in {"BOVA11", "BOVV11", "HASH11", "GOLD11", "IVVB11", "LFTS11"}:
+    if "ETF" in norm_text or code in KNOWN_ETF_TICKERS:
         return "etf"
-    if any(marker in norm_text for marker in ["FII", "FIAGRO", "FDO_INV_IMOB", "FUNDO_DE_INVESTIMENTO_IMOBILIARIO"]):
+    if code in KNOWN_FII_TICKERS or any(marker in norm_text for marker in ["FII", "FIAGRO", "FDO_INV_IMOB", "FUNDO_DE_INVESTIMENTO_IMOBILIARIO"]):
         return "fii"
     if re.fullmatch(r"[A-Z]{4}3[0-9]", code) or re.fullmatch(r"[A-Z]{4}34", code) or re.fullmatch(r"[A-Z]{4}39", code):
         return "bdr"
     return "normal"
+
+
+def refine_asset_category(code: str, current: str = "", market: str = "", product: str = "") -> str:
+    detected = classify_asset(code, market, product)
+    current = (current or "").strip() or detected
+    if detected in {"fii", "etf", "bdr", "opcoes", "futuro"}:
+        return detected
+    return current
 
 
 def annual_asset_group(pos: Position) -> str:
@@ -635,8 +967,28 @@ class MonthlyTax:
     options_loss_after: Decimal = Decimal("0")
     future_loss_after: Decimal = Decimal("0")
     tax_due: Decimal = Decimal("0")
+    tax_payable: Decimal = Decimal("0")
+    irrf_common_month: Decimal = Decimal("0")
+    irrf_common_before: Decimal = Decimal("0")
+    irrf_common_after: Decimal = Decimal("0")
+    irrf_daytrade_month: Decimal = Decimal("0")
+    irrf_daytrade_before: Decimal = Decimal("0")
+    irrf_daytrade_after: Decimal = Decimal("0")
+    irrf_fii_month: Decimal = Decimal("0")
+    irrf_fii_before: Decimal = Decimal("0")
+    irrf_fii_after: Decimal = Decimal("0")
     exempt_stock_gain: Decimal = Decimal("0")
     warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class BrokerageNoteTax:
+    dt: date
+    irrf_common: Decimal = Decimal("0")
+    irrf_daytrade: Decimal = Decimal("0")
+    irrf_fii: Decimal = Decimal("0")
+    note_number: str = ""
+    source_file: str = ""
 
 
 @dataclass
@@ -667,6 +1019,7 @@ class IRSimpleEngine:
         events: list[dict[str, Any]],
         dated_losses: dict[str, Decimal] | None = None,
         dated_loss_start: date | None = None,
+        brokerage_taxes: list[BrokerageNoteTax] | None = None,
     ) -> CalculationResult:
         positions: dict[str, Position] = {}
         warnings: list[str] = []
@@ -700,6 +1053,7 @@ class IRSimpleEngine:
         self._apply_income_movements(movements, monthly)
 
         self._apply_monthly_tax(monthly, initial_losses, dated_losses or {}, dated_loss_start)
+        self._apply_withholding(monthly, brokerage_taxes or [])
         exempt_income, taxable_income, debts = self._annual_tables(movements, positions)
         monthly_loans = self._monthly_loans(movements)
         return CalculationResult(self.year, monthly, positions, exempt_income, taxable_income, debts, warnings, monthly_positions, monthly_loans, pending_options)
@@ -925,14 +1279,14 @@ class IRSimpleEngine:
         dated_losses: dict[str, Decimal],
         dated_loss_start: date | None,
     ) -> None:
-        normal_loss = abs(money(initial_losses.get("normal"))) + abs(money(initial_losses.get("opcoes"))) + abs(money(initial_losses.get("futuro")))
+        normal_loss = abs(money(initial_losses.get("normal")))
         day_loss = abs(money(initial_losses.get("daytrade")))
         fii_loss = abs(money(initial_losses.get("fii")))
         for item in monthly:
             if dated_loss_start and dated_loss_start.year == self.year and item.month == dated_loss_start.month:
-                normal_loss = q2(normal_loss + abs(money(dated_losses.get("normal"))) + abs(money(dated_losses.get("opcoes"))) + abs(money(dated_losses.get("futuro"))))
-                day_loss = q2(day_loss + abs(money(dated_losses.get("daytrade"))))
-                fii_loss = q2(fii_loss + abs(money(dated_losses.get("fii"))))
+                normal_loss = abs(money(dated_losses.get("normal")))
+                day_loss = abs(money(dated_losses.get("daytrade")))
+                fii_loss = abs(money(dated_losses.get("fii")))
             item.normal_loss_before = q2(normal_loss)
             item.daytrade_loss_before = q2(day_loss)
             item.fii_loss_before = q2(fii_loss)
@@ -966,6 +1320,46 @@ class IRSimpleEngine:
             item.options_loss_after = Decimal("0")
             item.future_loss_after = Decimal("0")
             item.tax_due = q2(item.normal_base * Decimal("0.15") + item.daytrade_base * Decimal("0.20") + item.fii_base * Decimal("0.20"))
+            item.tax_payable = item.tax_due
+
+    def _apply_withholding(self, monthly: list[MonthlyTax], brokerage_taxes: list[BrokerageNoteTax]) -> None:
+        by_month: dict[int, dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
+        for note in brokerage_taxes:
+            if note.dt.year != self.year:
+                continue
+            by_month[note.dt.month]["common"] += money(note.irrf_common)
+            by_month[note.dt.month]["daytrade"] += money(note.irrf_daytrade)
+            by_month[note.dt.month]["fii"] += money(note.irrf_fii)
+        common_credit = Decimal("0")
+        daytrade_credit = Decimal("0")
+        fii_credit = Decimal("0")
+        for item in monthly:
+            item.irrf_common_before = q2(common_credit)
+            item.irrf_daytrade_before = q2(daytrade_credit)
+            item.irrf_fii_before = q2(fii_credit)
+            item.irrf_common_month = q2(by_month[item.month]["common"])
+            item.irrf_daytrade_month = q2(by_month[item.month]["daytrade"])
+            item.irrf_fii_month = q2(by_month[item.month]["fii"])
+
+            common_tax = q2(item.normal_base * Decimal("0.15"))
+            daytrade_tax = q2(item.daytrade_base * Decimal("0.20"))
+            fii_tax = q2(item.fii_base * Decimal("0.20"))
+
+            common_available = q2(common_credit + item.irrf_common_month)
+            daytrade_available = q2(daytrade_credit + item.irrf_daytrade_month)
+            fii_available = q2(fii_credit + item.irrf_fii_month)
+
+            common_payable = q2(max(Decimal("0"), common_tax - common_available))
+            daytrade_payable = q2(max(Decimal("0"), daytrade_tax - daytrade_available))
+            fii_payable = q2(max(Decimal("0"), fii_tax - fii_available))
+
+            common_credit = q2(max(Decimal("0"), common_available - common_tax))
+            daytrade_credit = q2(max(Decimal("0"), daytrade_available - daytrade_tax))
+            fii_credit = q2(max(Decimal("0"), fii_available - fii_tax))
+            item.irrf_common_after = common_credit
+            item.irrf_daytrade_after = daytrade_credit
+            item.irrf_fii_after = fii_credit
+            item.tax_payable = q2(common_payable + daytrade_payable + fii_payable)
 
     def _process_option_trades(
         self,
@@ -1045,7 +1439,7 @@ class IRSimpleEngine:
                         elif pos["long_qty"] > 0:
                             monthly[event_date.month - 1].options_result += q2(repurchase_value - pos["long_cost"])
                 continue
-            if event_type and "ativa" in event_type:
+            if event_type and self._is_open_option_event(event_type):
                 self._append_pending_option(pending, pos, "Registrada como vendida/comprada e ainda ativa")
                 continue
             if event_type and ("exercicio" in event_type or "virou_po" in event_type or event_type.endswith("po")):
@@ -1053,6 +1447,7 @@ class IRSimpleEngine:
             if isinstance(expiry, date) and expiry <= cutoff:
                 if pos["long_qty"] > 0 and expiry.year == self.year:
                     monthly[expiry.month - 1].options_result -= q2(pos["long_cost"])
+                    self._append_pending_option(pending, pos, "SUPOSICAO: opcao comprada vencida foi tratada como virou po; confirme ou registre recompra/exercicio")
                     warnings.append(
                         f"Opcao comprada vencida sem venda/exercicio identificado: codigo={code}; vencimento={expiry:%d/%m/%Y}; "
                         f"qtd_aberta={fmt_decimal(pos['long_qty'])}; premio_pago=R$ {fmt_money(pos['long_cost'])}; "
@@ -1060,6 +1455,7 @@ class IRSimpleEngine:
                     )
                 if pos["short_qty"] > 0 and expiry.year == self.year:
                     monthly[expiry.month - 1].options_result += q2(pos["short_credit"])
+                    self._append_pending_option(pending, pos, "SUPOSICAO: opcao vendida vencida foi tratada como sem recompra/exercicio; confirme ou registre recompra/exercicio")
                     warnings.append(
                         f"Opcao vendida vencida sem recompra/exercicio identificado: codigo={code}; vencimento={expiry:%d/%m/%Y}; "
                         f"qtd_aberta={fmt_decimal(pos['short_qty'])}; premio_recebido=R$ {fmt_money(pos['short_credit'])}; "
@@ -1077,16 +1473,20 @@ class IRSimpleEngine:
             kind = normalize_header(event.get("tipo"))
             if not code:
                 continue
-            if any(marker in kind for marker in ["exercicio", "virou_po", "po", "ainda_ativa", "vendida_ativa", "recompra", "recomprada", "liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao"]):
+            if any(marker in kind for marker in ["exercicio", "virou_po", "po", "ainda_ativa", "vendida_ativa", "ainda_em_aberto", "em_aberto", "recompra", "recomprada", "liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao"]):
                 resolved[code] = kind
         return resolved
+
+    def _is_open_option_event(self, event_type: str) -> bool:
+        normalized = normalize_header(event_type)
+        return "ativa" in normalized or "em_aberto" in normalized or ("aberto" in normalized and "opcao" in normalized)
 
     def _resolved_option_event_rows(self, events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         rows: dict[str, dict[str, Any]] = {}
         for event in events:
             code = normalize_ticker(event.get("ativo"))
             kind = normalize_header(event.get("tipo"))
-            if code and any(marker in kind for marker in ["exercicio", "virou_po", "po", "ainda_ativa", "vendida_ativa", "recompra", "recomprada", "liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao"]):
+            if code and any(marker in kind for marker in ["exercicio", "virou_po", "po", "ainda_ativa", "vendida_ativa", "ainda_em_aberto", "em_aberto", "recompra", "recomprada", "liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao"]):
                 rows[code] = event
         return rows
 
@@ -1317,7 +1717,7 @@ class IRSimpleEngine:
         resolved_codes = {
             normalize_ticker(event.get("ativo"))
             for event in events
-            if any(marker in normalize_header(event.get("tipo")) for marker in ["exercicio", "virou_po", "po", "ainda_ativa", "vendida_ativa", "liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao"])
+            if any(marker in normalize_header(event.get("tipo")) for marker in ["exercicio", "virou_po", "po", "ainda_ativa", "vendida_ativa", "ainda_em_aberto", "em_aberto", "liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao"])
         }
         resolved_base_codes = {normalize_option_exercise_code(code) for code in resolved_codes}
         for trade in option_trades:
@@ -1579,13 +1979,14 @@ class IRSimpleApp:
         self.selected_year_var = tk.StringVar(value=str(self.config.get("selected_year") or self.end_year_var.get()))
         self.name_var = tk.StringVar(value=str(self.config.get("name") or ""))
         self.consolidated_files: list[str] = list(self.config.get("consolidated_files", []))
+        self.benchmark_cache: dict[str, dict[str, str]] = self._load_benchmark_cache()
         default_neg = self.config.get("negociacao_file") or str(latest_matching_file(["negociacao-*.xlsx"], BASE_DIR / "negociacao-2026-05-17-16-41-46.xlsx"))
         default_mov = self.config.get("movimentacao_file") or str(latest_matching_file(["movimentacao-*.xlsx"], BASE_DIR / "movimentacao-2026-05-17-16-43-42.xlsx"))
         self.neg_file_var = tk.StringVar(value=default_neg)
         self.mov_file_var = tk.StringVar(value=default_mov)
         self.loss_vars = {
             key: tk.StringVar(value=str(self.config.get(f"loss_{key}") or "0,00"))
-            for key in ["normal", "daytrade", "fii", "opcoes", "futuro"]
+            for key in ["normal", "daytrade", "fii"]
         }
         self.loss_start_date_var = tk.StringVar(value=str(self.config.get("loss_start_date") or f"31/12/{int(self.start_year_var.get()) - 1}"))
         self.status_var = tk.StringVar(value="Importe as planilhas da B3 ou informe os dados manualmente.")
@@ -1620,11 +2021,13 @@ class IRSimpleApp:
         notebook = ttk.Notebook(root)
         notebook.pack(fill="both", expand=True)
         self._build_import_tab(notebook)
+        self._build_brokerage_notes_tab(notebook)
         self._build_manual_tab(notebook)
         self._build_results_tab(notebook)
         self._build_annual_tab(notebook)
         self._build_history_tab(notebook)
         self._build_monthly_portfolio_tab(notebook)
+        self._build_wealth_tab(notebook)
         self._build_options_tab(notebook)
         self._build_b3_check_tab(notebook)
         self._build_consolidated_reports_tab(notebook)
@@ -1649,8 +2052,12 @@ class IRSimpleApp:
         losses = ttk.LabelFrame(tab, text="Prejuizos a compensar na data inicial", padding=10)
         losses.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(14, 0))
         ttk.Label(losses, text="Data-base do saldo").grid(row=0, column=0, sticky="w", padx=(0, 4))
-        ttk.Entry(losses, textvariable=self.loss_start_date_var, width=12).grid(row=0, column=1, sticky="w", padx=(0, 16))
-        labels = [("normal", "Operacoes normais"), ("daytrade", "Day trade"), ("fii", "FII/FIAGRO"), ("opcoes", "Opcoes"), ("futuro", "Mercado futuro")]
+        loss_date_entry = ttk.Entry(losses, textvariable=self.loss_start_date_var, width=12)
+        loss_date_entry.grid(row=0, column=1, sticky="w", padx=(0, 6))
+        loss_date_entry.bind("<FocusOut>", lambda _event: self._normalize_loss_date_field(show_error=False))
+        ttk.Button(losses, text="31/12 ano anterior", command=self._set_loss_base_previous_year).grid(row=0, column=2, sticky="w", padx=(0, 10))
+        ttk.Label(losses, text="Digite 31122024 ou 31/12/2024", foreground="#475569").grid(row=0, column=3, columnspan=4, sticky="w")
+        labels = [("normal", "Operacoes normais"), ("daytrade", "Day trade"), ("fii", "FII/FIAGRO")]
         for idx, (key, label) in enumerate(labels):
             ttk.Label(losses, text=label).grid(row=1, column=idx * 2, sticky="w", padx=(0, 4), pady=(8, 0))
             ttk.Entry(losses, textvariable=self.loss_vars[key], width=14).grid(row=1, column=idx * 2 + 1, sticky="w", padx=(0, 12), pady=(8, 0))
@@ -1714,6 +2121,34 @@ class IRSimpleApp:
                 tree.column(col, width=105, anchor="w")
         self.trade_preview.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
         self.movement_preview.grid(row=1, column=1, sticky="nsew", padx=(6, 0))
+
+    def _build_brokerage_notes_tab(self, notebook: ttk.Notebook) -> None:
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text="Notas corretagem")
+        bar = ttk.Frame(tab)
+        bar.pack(fill="x", pady=(0, 8))
+        ttk.Button(bar, text="Importar notas PDF", command=self.import_brokerage_notes).pack(side="left")
+        ttk.Button(bar, text="Limpar notas importadas", command=self.clear_brokerage_notes).pack(side="left", padx=6)
+        self.brokerage_notes_status_var = tk.StringVar(value="")
+        ttk.Label(bar, textvariable=self.brokerage_notes_status_var, foreground="#475569").pack(side="left", padx=10)
+        cols = ["data", "nota", "irrf_comum", "irrf_dt", "irrf_fii", "base", "arquivo"]
+        labels = ["Data pregão", "Nota", "IRRF comum", "IRRF day trade", "IRRF FII", "Base IRRF", "Arquivo"]
+        self.brokerage_notes_tree = ttk.Treeview(tab, columns=cols, show="headings", height=16)
+        for col, label in zip(cols, labels):
+            self.brokerage_notes_tree.heading(col, text=label)
+            self.brokerage_notes_tree.column(col, width=130 if col != "arquivo" else 480, anchor="e" if col.startswith("irrf") or col == "base" else "w")
+        self.brokerage_notes_tree.pack(fill="both", expand=True)
+
+        compare_frame = ttk.LabelFrame(tab, text="Conferencia mensal: notas x calculo principal B3", padding=6)
+        compare_frame.pack(fill="both", expand=True, pady=(8, 0))
+        compare_cols = ["mes", "venda_normal_notas", "venda_normal_b3", "venda_fii_notas", "venda_fii_b3", "opcoes_notas", "opcoes_b3", "irrf_comum", "irrf_dt", "irrf_fii"]
+        compare_labels = ["Mes", "Vendas normais notas", "Vendas normais B3", "Vendas FII notas", "Vendas FII B3", "Opcoes notas", "Opcoes B3", "IRRF comum", "IRRF DT", "IRRF FII"]
+        self.brokerage_compare_tree = ttk.Treeview(compare_frame, columns=compare_cols, show="headings", height=8)
+        for col, label in zip(compare_cols, compare_labels):
+            self.brokerage_compare_tree.heading(col, text=label)
+            self.brokerage_compare_tree.column(col, width=130, anchor="e" if col != "mes" else "w")
+        self.brokerage_compare_tree.pack(fill="both", expand=True)
+        self.refresh_brokerage_notes_view()
 
     def _build_manual_tab(self, notebook: ttk.Notebook) -> None:
         tab = ttk.Frame(notebook, padding=8)
@@ -1998,6 +2433,63 @@ class IRSimpleApp:
             self.monthly_portfolio_tree.column(col, width=width, anchor="e" if col not in {"ativo", "categoria", "mes"} else "w")
         self.monthly_portfolio_tree.pack(fill="both", expand=True)
 
+    def _build_wealth_tab(self, notebook: ttk.Notebook) -> None:
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text="Patrimonio")
+        top = ttk.Frame(tab)
+        top.pack(fill="x", pady=(0, 8))
+        ttk.Label(top, text="Visualizar").pack(side="left")
+        self.wealth_view_var = tk.StringVar(value="anual")
+        view_combo = ttk.Combobox(top, textvariable=self.wealth_view_var, values=["anual", "mensal"], width=10, state="readonly")
+        view_combo.pack(side="left", padx=(6, 16))
+        view_combo.bind("<<ComboboxSelected>>", lambda _event: self._refresh_wealth_view())
+        self.show_ibov_var = tk.BooleanVar(value=True)
+        self.show_selic_var = tk.BooleanVar(value=True)
+        self.show_poupanca_var = tk.BooleanVar(value=True)
+        for text, var in [("Ibovespa", self.show_ibov_var), ("Selic", self.show_selic_var), ("Poupanca", self.show_poupanca_var)]:
+            ttk.Checkbutton(top, text=text, variable=var, command=self._draw_wealth_chart).pack(side="left", padx=(0, 8))
+        ttk.Button(top, text="Atualizar indices", command=self._update_benchmarks_from_web).pack(side="left", padx=(4, 12))
+        ttk.Label(
+            top,
+            text="Comparacao normalizada pela base do primeiro ponto de patrimonio.",
+            foreground="#475569",
+        ).pack(side="left")
+
+        body = ttk.PanedWindow(tab, orient="horizontal")
+        body.pack(fill="both", expand=True)
+        table_frame = ttk.LabelFrame(body, text="Dados do grafico", padding=6)
+        self.wealth_tree = ttk.Treeview(
+            table_frame,
+            columns=["periodo", "patrimonio", "ibovespa", "selic", "poupanca", "ganho_acoes", "ganho_fundos", "outros", "total", "imposto", "prejuizos"],
+            show="headings",
+            height=18,
+        )
+        for col, label, width in [
+            ("periodo", "Periodo", 110),
+            ("patrimonio", "Patrimonio", 130),
+            ("ibovespa", "Ibovespa", 120),
+            ("selic", "Selic", 120),
+            ("poupanca", "Poupanca", 120),
+            ("ganho_acoes", "Ganho acoes/ETF", 130),
+            ("ganho_fundos", "Ganho fundos/FII", 130),
+            ("outros", "Opcoes/Futuro/DT", 130),
+            ("total", "Total", 120),
+            ("imposto", "Imposto", 110),
+            ("prejuizos", "Prejuizos finais", 180),
+        ]:
+            self.wealth_tree.heading(col, text=label)
+            self.wealth_tree.column(col, width=width, anchor="e" if col != "periodo" else "w")
+        self.wealth_tree.pack(fill="both", expand=True)
+        body.add(table_frame, weight=1)
+
+        chart_frame = ttk.LabelFrame(body, text="Evolucao do patrimonio", padding=6)
+        self.wealth_canvas = tk.Canvas(chart_frame, background="white", highlightthickness=1, highlightbackground="#cbd5e1")
+        self.wealth_canvas.pack(fill="both", expand=True)
+        self.wealth_canvas.bind("<Configure>", lambda _event: self._draw_wealth_chart())
+        body.add(chart_frame, weight=2)
+        self.wealth_points: list[tuple[str, Decimal, Decimal, Decimal]] = []
+        self.wealth_benchmark_points: dict[str, list[tuple[str, Decimal]]] = {}
+
     def _build_b3_check_tab(self, notebook: ttk.Notebook) -> None:
         tab = ttk.Frame(notebook, padding=8)
         notebook.add(tab, text="Conferencia B3")
@@ -2168,6 +2660,22 @@ class IRSimpleApp:
         except Exception as exc:
             debug_log(f"Falha ao carregar configuracao do banco: {exc}")
 
+    def _load_benchmark_cache(self) -> dict[str, dict[str, str]]:
+        raw = self.config.get("benchmark_cache")
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(data, dict):
+                return {
+                    str(name): {str(period): str(value) for period, value in values.items()}
+                    for name, values in data.items()
+                    if isinstance(values, dict)
+                }
+        except Exception as exc:
+            debug_log(f"Falha ao carregar cache de indices: {exc}")
+        return {}
+
     def _save_config(self) -> None:
         self.config["name"] = self.name_var.get()
         self.config["start_year"] = str(self.start_year_var.get())
@@ -2179,6 +2687,7 @@ class IRSimpleApp:
         self.config["negociacao_file"] = self.neg_file_var.get()
         self.config["movimentacao_file"] = self.mov_file_var.get()
         self.config["consolidated_files"] = self.consolidated_files
+        self.config["benchmark_cache"] = json.dumps(self.benchmark_cache, ensure_ascii=False, sort_keys=True)
         if self.username == "local":
             write_config(self.config)
         try:
@@ -2211,6 +2720,27 @@ class IRSimpleApp:
     def _bind_persistent_header_fields(self) -> None:
         for var in [self.name_var, self.selected_year_var, self.start_year_var, self.end_year_var, self.loss_start_date_var, *self.loss_vars.values()]:
             var.trace_add("write", lambda *_args: self._save_config())
+
+    def _normalize_loss_date_field(self, show_error: bool = True) -> date | None:
+        raw = self.loss_start_date_var.get().strip()
+        if not raw:
+            return None
+        parsed = parse_date(raw)
+        if parsed is None:
+            if show_error:
+                messagebox.showerror(APP_TITLE, "Informe a data-base do saldo no formato 31122024 ou 31/12/2024.")
+            return None
+        formatted = parsed.strftime("%d/%m/%Y")
+        if raw != formatted:
+            self.loss_start_date_var.set(formatted)
+        return parsed
+
+    def _set_loss_base_previous_year(self) -> None:
+        try:
+            year = int(self.start_year_var.get()) - 1
+        except Exception:
+            year = date.today().year - 1
+        self.loss_start_date_var.set(f"31/12/{year}")
 
     def _save_imported_data_to_db(self, neg_file: Path, mov_file: Path) -> None:
         try:
@@ -2299,9 +2829,7 @@ class IRSimpleApp:
                     qty=money(row["qty"]),
                     price=money(row["price"]),
                     value=q2(row["value"]),
-                    category=classify_asset(normalize_ticker(row["code"]), row["market"] or "")
-                    if row["category"] == "futuro" and classify_asset(normalize_ticker(row["code"]), row["market"] or "") != "futuro"
-                    else (row["category"] or classify_asset(normalize_ticker(row["code"]), row["market"] or "")),
+                    category=refine_asset_category(normalize_ticker(row["code"]), row["category"], row["market"] or ""),
                     expiry=parse_date(row["expiry"]),
                 )
                 for row in trade_rows
@@ -2317,7 +2845,7 @@ class IRSimpleApp:
                     qty=money(row["qty"]),
                     unit_price=money(row["unit_price"]),
                     value=q2(row["value"]),
-                    category=row["category"] or classify_asset(normalize_ticker(row["code"]), product=row["product"] or ""),
+                    category=refine_asset_category(normalize_ticker(row["code"]), row["category"], product=row["product"] or ""),
                 )
                 for row in movement_rows
             ]
@@ -2363,6 +2891,250 @@ class IRSimpleApp:
         except Exception as exc:
             debug_log(f"Falha ao carregar CNPJs do banco: {exc}")
             return {}
+
+    def import_brokerage_notes(self) -> None:
+        paths = filedialog.askopenfilenames(
+            title="Selecionar notas de corretagem PDF",
+            filetypes=[("PDF", "*.pdf"), ("Todos", "*.*")],
+            initialdir=str(BASE_DIR / "notas" if (BASE_DIR / "notas").exists() else Path.home() / "Downloads"),
+        )
+        if not paths:
+            return
+        try:
+            notes = parse_brokerage_note_pdfs([Path(path) for path in paths])
+            if not notes:
+                messagebox.showwarning(APP_TITLE, "Nenhuma nota de corretagem reconhecida nos PDFs selecionados.")
+                return
+            with db_connect() as conn:
+                existing_rows = conn.execute(
+                    "SELECT id, note_number, trade_date FROM brokerage_note_taxes WHERE user_id = ?",
+                    (self.user_id,),
+                ).fetchall()
+                existing = {(str(row["note_number"] or ""), str(row["trade_date"] or "")): row["id"] for row in existing_rows}
+                inserted = 0
+                updated = 0
+                skipped = 0
+                seen_batch: set[tuple[str, str]] = set()
+                for note in notes:
+                    key = (str(note["note_number"]), note["trade_date"].isoformat())
+                    if key in seen_batch:
+                        skipped += 1
+                        continue
+                    seen_batch.add(key)
+                    values = (
+                        note["broker"],
+                        note["source_file"],
+                        note["page"],
+                        str(note["irrf_common"]),
+                        str(note["irrf_daytrade"]),
+                        str(note["irrf_fii"]),
+                        str(note["irrf_base"]),
+                        str(note["buy_normal"]),
+                        str(note["sell_normal"]),
+                        str(note["buy_fii"]),
+                        str(note["sell_fii"]),
+                        str(note["buy_options"]),
+                        str(note["sell_options"]),
+                    )
+                    if key in existing:
+                        conn.execute(
+                            """
+                            UPDATE brokerage_note_taxes
+                            SET broker = ?, source_file = ?, page = ?, irrf_common = ?, irrf_daytrade = ?, irrf_fii = ?, irrf_base = ?,
+                                buy_normal = ?, sell_normal = ?, buy_fii = ?, sell_fii = ?, buy_options = ?, sell_options = ?
+                            WHERE id = ? AND user_id = ?
+                            """,
+                            values + (existing[key], self.user_id),
+                        )
+                        updated += 1
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO brokerage_note_taxes
+                            (user_id, note_number, trade_date, broker, source_file, page, irrf_common, irrf_daytrade, irrf_fii, irrf_base, buy_normal, sell_normal, buy_fii, sell_fii, buy_options, sell_options)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                self.user_id,
+                                note["note_number"],
+                                note["trade_date"].isoformat(),
+                                *values,
+                            ),
+                        )
+                        inserted += 1
+            self.refresh_brokerage_notes_view()
+            msg = f"Notas processadas: {len(notes)}. Novas: {inserted}. Atualizadas: {updated}. Duplicadas no lote: {skipped}."
+            self.status_var.set(f"{msg} O calculo principal continua usando as planilhas B3.")
+            messagebox.showinfo(APP_TITLE, f"{msg}\nOperacoes nao serao duplicadas; notas servem para IRRF e conferencia.")
+        except Exception as exc:
+            debug_log(f"Falha ao importar notas de corretagem: {exc}")
+            messagebox.showerror(APP_TITLE, f"Falha ao importar notas de corretagem:\n{exc}")
+
+    def clear_brokerage_notes(self) -> None:
+        if not messagebox.askyesno(APP_TITLE, "Remover todas as notas de corretagem importadas deste usuario?"):
+            return
+        with db_connect() as conn:
+            conn.execute("DELETE FROM brokerage_note_taxes WHERE user_id = ?", (self.user_id,))
+        self.refresh_brokerage_notes_view()
+        self.status_var.set("Notas de corretagem removidas.")
+        self.refresh_brokerage_compare_view()
+
+    def refresh_brokerage_notes_view(self) -> None:
+        if not hasattr(self, "brokerage_notes_tree"):
+            return
+        for item in self.brokerage_notes_tree.get_children():
+            self.brokerage_notes_tree.delete(item)
+        try:
+            with db_connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT trade_date, note_number, irrf_common, irrf_daytrade, irrf_fii, irrf_base, source_file
+                    FROM brokerage_note_taxes
+                    WHERE user_id = ?
+                    ORDER BY trade_date, note_number
+                    """,
+                    (self.user_id,),
+                ).fetchall()
+        except Exception as exc:
+            debug_log(f"Falha ao listar notas de corretagem: {exc}")
+            rows = []
+        for row in rows:
+            dt = parse_date(row["trade_date"])
+            self.brokerage_notes_tree.insert(
+                "",
+                "end",
+                values=[
+                    dt.strftime("%d/%m/%Y") if dt else row["trade_date"],
+                    row["note_number"],
+                    fmt_money(row["irrf_common"]),
+                    fmt_money(row["irrf_daytrade"]),
+                    fmt_money(row["irrf_fii"]),
+                    fmt_money(row["irrf_base"]),
+                    Path(row["source_file"]).name,
+                ],
+            )
+        if hasattr(self, "brokerage_notes_status_var"):
+            self.brokerage_notes_status_var.set(f"{len(rows)} notas carregadas.")
+        self.refresh_brokerage_compare_view()
+
+    def refresh_brokerage_compare_view(self) -> None:
+        if not hasattr(self, "brokerage_compare_tree"):
+            return
+        for item in self.brokerage_compare_tree.get_children():
+            self.brokerage_compare_tree.delete(item)
+        try:
+            selected_year = int(self.selected_year_var.get())
+        except Exception:
+            selected_year = date.today().year
+        note_rows = self._brokerage_monthly_summary(selected_year)
+        result = self.results_by_year.get(selected_year)
+        for month in range(1, 13):
+            note = note_rows.get(month, defaultdict(Decimal))
+            b3 = result.monthly[month - 1] if result else MonthlyTax(month=month)
+            self.brokerage_compare_tree.insert(
+                "",
+                "end",
+                values=[
+                    MONTHS[month - 1],
+                    fmt_money(note["sell_normal"]),
+                    fmt_money(b3.normal_sales),
+                    fmt_money(note["sell_fii"]),
+                    fmt_money(b3.fii_sales),
+                    fmt_money(note["buy_options"] + note["sell_options"]),
+                    fmt_money(abs(b3.options_result)),
+                    fmt_money(note["irrf_common"]),
+                    fmt_money(note["irrf_daytrade"]),
+                    fmt_money(note["irrf_fii"]),
+                ],
+            )
+
+    def _brokerage_monthly_summary(self, year: int) -> dict[int, defaultdict[str, Decimal]]:
+        summary: dict[int, defaultdict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
+        try:
+            with db_connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT trade_date, irrf_common, irrf_daytrade, irrf_fii, buy_normal, sell_normal, buy_fii, sell_fii, buy_options, sell_options
+                    FROM brokerage_note_taxes
+                    WHERE user_id = ?
+                    """,
+                    (self.user_id,),
+                ).fetchall()
+        except Exception as exc:
+            debug_log(f"Falha ao resumir notas de corretagem: {exc}")
+            return summary
+        for row in rows:
+            dt = parse_date(row["trade_date"])
+            if not dt or dt.year != year:
+                continue
+            bucket = summary[dt.month]
+            for key in ["irrf_common", "irrf_daytrade", "irrf_fii", "buy_normal", "sell_normal", "buy_fii", "sell_fii", "buy_options", "sell_options"]:
+                bucket[key] += money(row[key])
+        return summary
+
+    def _brokerage_note_taxes(self) -> list[BrokerageNoteTax]:
+        try:
+            with db_connect() as conn:
+                rows = conn.execute(
+                    "SELECT trade_date, note_number, source_file, irrf_common, irrf_daytrade, irrf_fii FROM brokerage_note_taxes WHERE user_id = ?",
+                    (self.user_id,),
+                ).fetchall()
+            result: list[BrokerageNoteTax] = []
+            for row in rows:
+                dt = parse_date(row["trade_date"])
+                if dt is None:
+                    continue
+                result.append(
+                    BrokerageNoteTax(
+                        dt=dt,
+                        irrf_common=money(row["irrf_common"]),
+                        irrf_daytrade=money(row["irrf_daytrade"]),
+                        irrf_fii=money(row["irrf_fii"]),
+                        note_number=str(row["note_number"] or ""),
+                        source_file=str(row["source_file"] or ""),
+                    )
+                )
+            return result
+        except Exception as exc:
+            debug_log(f"Falha ao carregar notas de corretagem: {exc}")
+            return []
+
+    def _brokerage_note_files_for_month(self, year: int, month: int) -> list[Path]:
+        paths: list[Path] = []
+        try:
+            with db_connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT DISTINCT source_file
+                    FROM brokerage_note_taxes
+                    WHERE user_id = ? AND trade_date >= ? AND trade_date <= ?
+                    """,
+                    (self.user_id, f"{year}-{month:02d}-01", f"{year}-{month:02d}-31"),
+                ).fetchall()
+            for row in rows:
+                if not row["source_file"]:
+                    continue
+                path = Path(row["source_file"])
+                if not path.is_absolute():
+                    path = BASE_DIR / path
+                if path.exists() and path not in paths:
+                    paths.append(path)
+        except Exception as exc:
+            debug_log(f"Falha ao localizar notas do mes: {exc}")
+        patterns = [
+            f"*{year}_{month:02d}_*.pdf",
+            f"*{year}{month:02d}*.pdf",
+            f"*{month:02d}-{str(year)[2:]}*.pdf",
+        ]
+        for folder in [BASE_DIR / "notas", Path.home() / "Downloads"]:
+            if not folder.exists():
+                continue
+            for pattern in patterns:
+                for path in folder.glob(pattern):
+                    if path.exists() and path not in paths:
+                        paths.append(path)
+        return paths
+
 
     def import_files(self, show_message: bool = False) -> bool:
         debug_log("Inicio da importacao")
@@ -2597,7 +3369,7 @@ class IRSimpleApp:
         rows = []
         for row in self.event_table.rows():
             event_type = normalize_header(row.get("tipo"))
-            if any(marker in event_type for marker in ["exercicio", "virou_po", "po", "ainda_ativa", "vendida_ativa", "recompra", "recomprada", "liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao"]):
+            if any(marker in event_type for marker in ["exercicio", "virou_po", "po", "ainda_ativa", "vendida_ativa", "ainda_em_aberto", "em_aberto", "recompra", "recomprada", "liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao"]):
                 rows.append(row)
         if self.username == "local":
             OPTION_EVENTS_FILE.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -2637,7 +3409,7 @@ class IRSimpleApp:
         keep_rows = []
         for row in self.event_table.rows():
             event_type = normalize_header(row.get("tipo"))
-            is_option_resolution = any(marker in event_type for marker in ["exercicio", "virou_po", "po", "ainda_ativa", "vendida_ativa", "recompra", "recomprada", "liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao"])
+            is_option_resolution = any(marker in event_type for marker in ["exercicio", "virou_po", "po", "ainda_ativa", "vendida_ativa", "ainda_em_aberto", "em_aberto", "recompra", "recomprada", "liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao"])
             key = (row.get("data", ""), row.get("tipo", ""), row.get("ativo", ""), row.get("quantidade", ""), row.get("valor", ""))
             if not is_option_resolution or key in option_keys:
                 keep_rows.append(row)
@@ -2681,12 +3453,12 @@ class IRSimpleApp:
             return
         year, code, expiry, qty, premium = values[:5]
         qty = fmt_decimal(abs(money(qty)))
-        if "ainda ativa" in event_type:
+        if "ainda ativa" in event_type or "em aberto" in event_type:
             event_date = f"31/12/{year}" if str(year).isdigit() else date.today().strftime("%d/%m/%Y")
         else:
             event_date = expiry or date.today().strftime("%d/%m/%Y")
         event_value = premium if event_type == "opcao virou po" else "0,00"
-        if "ainda ativa" in event_type:
+        if "ainda ativa" in event_type or "em aberto" in event_type:
             event_value = premium
         self.event_table.add_row([event_date, event_type, code, qty, event_value, "opcoes", "Lancado pela aba Opcoes a conferir; recalcule para atualizar."])
         self.pending_options_tree.set(selected[0], "situacao", f"Registrada como '{event_type}'. Recalcule para atualizar.")
@@ -2784,15 +3556,19 @@ class IRSimpleApp:
         losses = {key: money(var.get()) for key, var in self.loss_vars.items()}
         positions = self._manual_positions()
         events = self._manual_events()
+        parsed_loss_base_date = self._normalize_loss_date_field(show_error=True)
+        if self.loss_start_date_var.get().strip() and parsed_loss_base_date is None:
+            return
         self._set_calculating(True)
         try:
             debug_log(f"Inicio do calculo: {start_year}-{end_year}; negocios={len(self.trades)}; movimentacoes={len(self.movements)}")
             results: dict[int, CalculationResult] = {}
             current_positions = positions
-            current_losses = {key: Decimal("0") for key in ["normal", "daytrade", "fii", "opcoes", "futuro"]}
-            loss_start_date = self._loss_effect_date(parse_date(self.loss_start_date_var.get()))
+            current_losses = {key: Decimal("0") for key in ["normal", "daytrade", "fii"]}
+            loss_start_date = self._loss_effect_date(parsed_loss_base_date)
             manual_losses_applied = False
             asset_cnpjs = self._asset_cnpj_map()
+            brokerage_taxes = self._brokerage_note_taxes()
             for year in range(start_year, end_year + 1):
                 self.status_var.set(f"Calculando ano-calendario {year}...")
                 self.root.update_idletasks()
@@ -2802,10 +3578,10 @@ class IRSimpleApp:
                 dated_loss_start: date | None = None
                 if not manual_losses_applied:
                     if loss_start_date is None or loss_start_date < date(year, 1, 1):
-                        initial_losses = self._combine_loss_dicts(initial_losses, losses)
+                        initial_losses = self._declared_loss_dict(losses)
                         manual_losses_applied = True
                     elif loss_start_date.year == year:
-                        dated_losses = losses
+                        dated_losses = self._declared_loss_dict(losses)
                         dated_loss_start = loss_start_date
                         manual_losses_applied = True
                 engine = IRSimpleEngine(year, asset_cnpjs)
@@ -2817,6 +3593,7 @@ class IRSimpleApp:
                     self._events_for_year(events, year, start_year),
                     dated_losses,
                     dated_loss_start,
+                    brokerage_taxes,
                 )
                 debug_log(f"Ano {year} calculado: posicoes={len(result.positions)}; alertas={len(result.warnings)}")
                 results[year] = result
@@ -2827,9 +3604,8 @@ class IRSimpleApp:
             debug_log(f"Falha no calculo: {exc}")
             self._fail_calculation(exc)
 
-    def _combine_loss_dicts(self, base: dict[str, Decimal], extra: dict[str, Decimal]) -> dict[str, Decimal]:
-        keys = {"normal", "daytrade", "fii", "opcoes", "futuro"}
-        return {key: q2(money(base.get(key)) + money(extra.get(key))) for key in keys}
+    def _declared_loss_dict(self, values: dict[str, Decimal]) -> dict[str, Decimal]:
+        return {key: q2(abs(money(values.get(key)))) for key in ["normal", "daytrade", "fii"]}
 
     def _loss_effect_date(self, base_date: date | None) -> date | None:
         if base_date is None:
@@ -2862,6 +3638,7 @@ class IRSimpleApp:
             self.selected_year_var.set(str(end_year))
         self._save_config()
         self._refresh_results()
+        self.refresh_brokerage_compare_view()
         self.status_var.set(f"Calculo concluido de {start_year} ate {end_year} (ultima declaracao: exercicio {end_year + 1}).")
         self._set_calculating(False)
         self.root.update_idletasks()
@@ -2911,9 +3688,110 @@ class IRSimpleApp:
             "normal": last.normal_loss_after,
             "daytrade": last.daytrade_loss_after,
             "fii": last.fii_loss_after,
-            "opcoes": last.options_loss_after,
-            "futuro": last.future_loss_after,
         }
+
+    def _portfolio_cost(self, positions: dict[str, Position]) -> Decimal:
+        return q2(
+            sum(
+                (pos.cost for pos in positions.values() if pos.qty > 0 and pos.category not in {"opcoes", "futuro"}),
+                Decimal("0"),
+            )
+        )
+
+    def _month_profit(self, item: MonthlyTax) -> Decimal:
+        return q2(item.normal_result + item.daytrade_result + item.fii_result + item.options_result + item.future_result)
+
+    def _month_stock_profit(self, item: MonthlyTax) -> Decimal:
+        return q2(item.normal_result)
+
+    def _month_fund_profit(self, item: MonthlyTax) -> Decimal:
+        return q2(item.fii_result)
+
+    def _month_other_profit(self, item: MonthlyTax) -> Decimal:
+        return q2(item.daytrade_result + item.options_result + item.future_result)
+
+    def _benchmark_period_range(self) -> tuple[date, date] | None:
+        if not self.results_by_year:
+            return None
+        start_year = min(self.results_by_year)
+        end_year = max(self.results_by_year)
+        return date(start_year, 1, 1), date(end_year, 12, 31)
+
+    def _ensure_benchmarks(self, force: bool = False) -> None:
+        period_range = self._benchmark_period_range()
+        if period_range is None:
+            return
+        start, end = period_range
+        start_key = month_key(start)
+        end_key = month_key(date(end.year, end.month, 1))
+        current = set(self.benchmark_cache.get("selic", {})) & set(self.benchmark_cache.get("poupanca", {})) & set(self.benchmark_cache.get("ibovespa", {}))
+        if not force and start_key in current and current:
+            return
+        try:
+            selic = fetch_bcb_monthly_percent(4390, start, end)
+            poupanca = fetch_bcb_monthly_percent(195, start, end)
+            ibov = fetch_ibovespa_monthly_close(start, end)
+            self.benchmark_cache = {
+                "selic": {key: str(q2(value)) for key, value in selic.items()},
+                "poupanca": {key: str(q2(value)) for key, value in poupanca.items()},
+                "ibovespa": {key: str(q2(value)) for key, value in ibov.items()},
+            }
+            self._save_config()
+        except Exception as exc:
+            debug_log(f"Falha ao atualizar indices de comparacao: {exc}")
+            if force:
+                messagebox.showerror(APP_TITLE, f"Falha ao buscar indices:\n{exc}")
+
+    def _update_benchmarks_from_web(self) -> None:
+        if not self.results_by_year:
+            messagebox.showinfo(APP_TITLE, "Clique em Calcular antes de atualizar os indices.")
+            return
+        self.status_var.set("Atualizando Ibovespa, Selic e Poupanca...")
+        self.root.update_idletasks()
+        self._ensure_benchmarks(force=True)
+        self._refresh_wealth_view()
+        self.status_var.set("Indices atualizados para comparacao patrimonial.")
+
+    def _benchmark_values_for_rows(self, rows: list[tuple[str, Decimal, Decimal, Decimal, Decimal, Decimal, Decimal, str]]) -> dict[str, dict[str, Decimal]]:
+        if not rows:
+            return {"ibovespa": {}, "selic": {}, "poupanca": {}}
+        self._ensure_benchmarks(force=False)
+        base = next((row[1] for row in rows if row[1] > 0), Decimal("100"))
+        if base <= 0:
+            base = Decimal("100")
+        monthly_keys = [f"{year}-{month:02d}" for year in self.results_by_year for month in range(1, 13)]
+        if not monthly_keys:
+            return {"ibovespa": {}, "selic": {}, "poupanca": {}}
+        first_key = min(monthly_keys)
+
+        selic_monthly = {key: money(value) for key, value in self.benchmark_cache.get("selic", {}).items()}
+        poupanca_monthly = {key: money(value) for key, value in self.benchmark_cache.get("poupanca", {}).items()}
+        ibov_monthly = {key: money(value) for key, value in self.benchmark_cache.get("ibovespa", {}).items()}
+
+        factors: dict[str, dict[str, Decimal]] = {"selic": {}, "poupanca": {}, "ibovespa": {}}
+        selic_value = base
+        poupanca_value = base
+        first_ibov = next((ibov_monthly[key] for key in sorted(ibov_monthly) if key >= first_key and ibov_monthly[key] > 0), Decimal("0"))
+        for key in sorted(monthly_keys):
+            if key in selic_monthly:
+                selic_value = q2(selic_value * (Decimal("1") + selic_monthly[key] / Decimal("100")))
+            if key in poupanca_monthly:
+                poupanca_value = q2(poupanca_value * (Decimal("1") + poupanca_monthly[key] / Decimal("100")))
+            factors["selic"][key] = selic_value
+            factors["poupanca"][key] = poupanca_value
+            if first_ibov > 0 and key in ibov_monthly and ibov_monthly[key] > 0:
+                factors["ibovespa"][key] = q2(base * ibov_monthly[key] / first_ibov)
+
+        selected: dict[str, dict[str, Decimal]] = {"ibovespa": {}, "selic": {}, "poupanca": {}}
+        for period, *_rest in rows:
+            parsed = parse_month_key(period)
+            if parsed is None:
+                continue
+            year, month = parsed
+            key = f"{year}-{month:02d}"
+            for name in selected:
+                selected[name][period] = factors[name].get(key, Decimal("0"))
+        return selected
 
     def _selected_result(self) -> CalculationResult | None:
         try:
@@ -2949,8 +3827,6 @@ class IRSimpleApp:
             ("N", monthly.normal_loss_after),
             ("DT", monthly.daytrade_loss_after),
             ("FII", monthly.fii_loss_after),
-            ("OP", monthly.options_loss_after),
-            ("FUT", monthly.future_loss_after),
         ]
         return " | ".join(f"{label}: {fmt_money(value)}" for label, value in values if value > 0) or "0,00"
 
@@ -3024,7 +3900,7 @@ class IRSimpleApp:
                         fmt_money(item.fii_result),
                         fmt_money(item.options_result),
                         fmt_money(item.future_result),
-                        fmt_money(item.tax_due),
+                        fmt_money(item.tax_payable),
                         self._losses_text(item),
                     ],
                 )
@@ -3034,6 +3910,191 @@ class IRSimpleApp:
                     self.history_loans_tree.insert("", "end", values=[MONTHS[month - 1], code, fmt_decimal(qty)])
         finally:
             self.updating_history = False
+
+    def _wealth_rows(self) -> list[tuple[str, Decimal, Decimal, Decimal, Decimal, Decimal, Decimal, str]]:
+        rows: list[tuple[str, Decimal, Decimal, Decimal, Decimal, Decimal, Decimal, str]] = []
+        if self.wealth_view_var.get() == "mensal":
+            for year, result in sorted(self.results_by_year.items()):
+                last_value = Decimal("0")
+                for item in result.monthly:
+                    positions = result.monthly_positions.get(item.month, {})
+                    if positions:
+                        last_value = self._portfolio_cost(positions)
+                    rows.append(
+                        (
+                            f"{year}-{item.month:02d}",
+                            last_value,
+                            self._month_stock_profit(item),
+                            self._month_fund_profit(item),
+                            self._month_other_profit(item),
+                            self._month_profit(item),
+                            q2(item.tax_payable),
+                            self._losses_text(item),
+                        )
+                    )
+            return rows
+        for year, result in sorted(self.results_by_year.items()):
+            summary = self._result_summary(result)
+            rows.append(
+                (
+                    str(year),
+                    self._portfolio_cost(result.positions),
+                    q2(summary["normal"]),
+                    q2(summary["fii"]),
+                    q2(summary["daytrade"] + summary["opcoes"] + summary["futuro"]),
+                    q2(summary["normal"] + summary["daytrade"] + summary["fii"] + summary["opcoes"] + summary["futuro"]),
+                    q2(sum((m.tax_payable for m in result.monthly), Decimal("0"))),
+                    self._losses_text(result.monthly[-1]),
+                )
+            )
+        return rows
+
+    def _refresh_wealth_view(self) -> None:
+        if not hasattr(self, "wealth_tree"):
+            return
+        for item in self.wealth_tree.get_children():
+            self.wealth_tree.delete(item)
+        rows = self._wealth_rows()
+        benchmarks = self._benchmark_values_for_rows(rows)
+        self.wealth_points = [(period, value, total, tax) for period, value, _stock, _fund, _other, total, tax, _losses in rows]
+        self.wealth_benchmark_points = {
+            name: [(period, values.get(period, Decimal("0"))) for period, *_rest in rows]
+            for name, values in benchmarks.items()
+        }
+        for period, value, stock, fund, other, total, tax, losses in rows:
+            self.wealth_tree.insert(
+                "",
+                "end",
+                values=[
+                    period,
+                    fmt_money(value),
+                    fmt_money(benchmarks["ibovespa"].get(period, 0)) if benchmarks["ibovespa"].get(period, 0) else "",
+                    fmt_money(benchmarks["selic"].get(period, 0)) if benchmarks["selic"].get(period, 0) else "",
+                    fmt_money(benchmarks["poupanca"].get(period, 0)) if benchmarks["poupanca"].get(period, 0) else "",
+                    fmt_money(stock),
+                    fmt_money(fund),
+                    fmt_money(other),
+                    fmt_money(total),
+                    fmt_money(tax),
+                    losses,
+                ],
+            )
+        self._draw_wealth_chart()
+
+    def _detail_subtotals(self, rows: list[list[str]]) -> dict[str, Decimal]:
+        totals: dict[str, Decimal] = defaultdict(Decimal)
+        for row in rows:
+            if len(row) < 13:
+                continue
+            source = str(row[0])
+            kind = str(row[2])
+            profit = money(row[12])
+            if not profit:
+                continue
+            if "conferencia" in source:
+                totals["diferenca/conferencia"] += profit
+            elif "vencimento" in kind or "virou po" in kind:
+                totals["suposicoes de vencimento"] += profit
+            elif "recompra" in kind:
+                totals["recompras/fechamentos"] += profit
+            elif "venda de opcao comprada" in kind:
+                totals["vendas de opcoes compradas"] += profit
+            elif "compra/venda" in kind or "day trade" in source:
+                totals["day trade"] += profit
+            else:
+                totals["operacoes realizadas"] += profit
+        return {key: q2(value) for key, value in totals.items()}
+
+    def _draw_wealth_chart(self) -> None:
+        if not hasattr(self, "wealth_canvas"):
+            return
+        canvas = self.wealth_canvas
+        canvas.delete("all")
+        width = max(canvas.winfo_width(), 300)
+        height = max(canvas.winfo_height(), 220)
+        margin_left = 82
+        margin_right = 24
+        margin_top = 24
+        margin_bottom = 54
+        plot_w = width - margin_left - margin_right
+        plot_h = height - margin_top - margin_bottom
+        canvas.create_rectangle(margin_left, margin_top, width - margin_right, height - margin_bottom, outline="#cbd5e1", fill="#ffffff")
+        if not self.wealth_points:
+            canvas.create_text(width / 2, height / 2, text="Clique em Calcular para gerar a evolucao patrimonial.", fill="#475569")
+            return
+
+        benchmark_series = []
+        if getattr(self, "show_ibov_var", None) is not None and self.show_ibov_var.get():
+            benchmark_series.append(("Ibovespa", "#f97316", self.wealth_benchmark_points.get("ibovespa", [])))
+        if getattr(self, "show_selic_var", None) is not None and self.show_selic_var.get():
+            benchmark_series.append(("Selic", "#16a34a", self.wealth_benchmark_points.get("selic", [])))
+        if getattr(self, "show_poupanca_var", None) is not None and self.show_poupanca_var.get():
+            benchmark_series.append(("Poupanca", "#9333ea", self.wealth_benchmark_points.get("poupanca", [])))
+        values = [point[1] for point in self.wealth_points]
+        for _name, _color, series in benchmark_series:
+            values.extend(value for _period, value in series if value > 0)
+        max_value = max(values)
+        min_value = min(values)
+        if max_value == min_value:
+            max_value += Decimal("1")
+            min_value = Decimal("0") if min_value >= 0 else min_value - Decimal("1")
+        span = max_value - min_value
+
+        for idx in range(5):
+            ratio = Decimal(idx) / Decimal("4")
+            y = margin_top + float(ratio) * plot_h
+            value = max_value - span * ratio
+            canvas.create_line(margin_left, y, width - margin_right, y, fill="#e2e8f0")
+            canvas.create_text(margin_left - 8, y, text=fmt_money(value), anchor="e", fill="#475569", font=("TkDefaultFont", 8))
+
+        def scaled_points(series: list[tuple[str, Decimal]]) -> list[tuple[float, float]]:
+            result: list[tuple[float, float]] = []
+            total_points = len(self.wealth_points)
+            period_index = {period: idx for idx, (period, *_rest) in enumerate(self.wealth_points)}
+            for period, value in series:
+                if value <= 0 or period not in period_index:
+                    continue
+                idx = period_index[period]
+                x = margin_left + (plot_w / max(total_points - 1, 1)) * idx
+                y = margin_top + float((max_value - value) / span) * plot_h
+                result.append((x, y))
+            return result
+
+        points: list[tuple[float, float]] = []
+        total = len(self.wealth_points)
+        for idx, (_period, value, _profit, _tax) in enumerate(self.wealth_points):
+            x = margin_left + (plot_w / max(total - 1, 1)) * idx
+            y = margin_top + float((max_value - value) / span) * plot_h
+            points.append((x, y))
+        if len(points) > 1:
+            canvas.create_line(*[coord for point in points for coord in point], fill="#2563eb", width=3, smooth=False)
+        for name, color, series in benchmark_series:
+            chart_points = scaled_points(series)
+            if len(chart_points) > 1:
+                canvas.create_line(*[coord for point in chart_points for coord in point], fill=color, width=2, dash=(5, 3), smooth=False)
+        for idx, (x, y) in enumerate(points):
+            period, value, _profit, _tax = self.wealth_points[idx]
+            canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill="#1d4ed8", outline="#1d4ed8")
+            if idx == 0 or idx == total - 1 or total <= 12 or idx % max(total // 10, 1) == 0:
+                canvas.create_text(x, height - margin_bottom + 18, text=period, anchor="n", fill="#475569", font=("TkDefaultFont", 8))
+        last_period, last_value, _last_profit, _last_tax = self.wealth_points[-1]
+        canvas.create_text(
+            margin_left,
+            8,
+            text=f"Ultimo ponto: {last_period} | Patrimonio: R$ {fmt_money(last_value)}",
+            anchor="nw",
+            fill="#0f172a",
+        )
+        legend_x = width - margin_right - 260
+        legend_y = 10
+        legend = [("Patrimonio", "#2563eb", None)] + [(name, color, None) for name, color, _series in benchmark_series]
+        for idx, (name, color, _dash) in enumerate(legend):
+            y = legend_y + idx * 16
+            if name == "Patrimonio":
+                canvas.create_line(legend_x, y + 6, legend_x + 28, y + 6, fill=color, width=3)
+            else:
+                canvas.create_line(legend_x, y + 6, legend_x + 28, y + 6, fill=color, width=3, dash=(5, 3))
+            canvas.create_text(legend_x + 34, y, text=name, anchor="nw", fill="#0f172a", font=("TkDefaultFont", 8))
 
     def _refresh_pending_options(self) -> None:
         for item in self.pending_options_tree.get_children():
@@ -3067,7 +4128,7 @@ class IRSimpleApp:
         for row in self.event_table.rows():
             if normalize_ticker(row.get("ativo")) == code:
                 event_type = normalize_header(row.get("tipo"))
-                if any(marker in event_type for marker in ["exercicio", "virou_po", "po", "ainda_ativa", "vendida_ativa", "recompra", "recomprada", "liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao"]):
+                if any(marker in event_type for marker in ["exercicio", "virou_po", "po", "ainda_ativa", "vendida_ativa", "ainda_em_aberto", "em_aberto", "recompra", "recomprada", "liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao"]):
                     return True
         return False
 
@@ -3076,7 +4137,7 @@ class IRSimpleApp:
             self.option_events_tree.delete(item)
         for row in self.event_table.rows():
             event_type = normalize_header(row.get("tipo"))
-            if not any(marker in event_type for marker in ["exercicio", "virou_po", "po", "ainda_ativa", "vendida_ativa", "recompra", "recomprada", "liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao"]):
+            if not any(marker in event_type for marker in ["exercicio", "virou_po", "po", "ainda_ativa", "vendida_ativa", "ainda_em_aberto", "em_aberto", "recompra", "recomprada", "liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao"]):
                 continue
             self.option_events_tree.insert(
                 "",
@@ -3291,8 +4352,13 @@ class IRSimpleApp:
             return self._daytrade_detail_rows(year, month, include_future=True)
         if column not in {"normal", "base_normal", "fii", "base_fii", "futuro", "opcoes", "imposto"}:
             return []
-        positions = {pos.code: Position(code=pos.code, qty=money(pos.qty), cost=q2(pos.cost), category=pos.category, broker=pos.broker) for pos in self._manual_positions()}
-        IRSimpleEngine(year)._apply_events_before_trades(positions, self._manual_events(), [])
+        start_year = min(self.results_by_year) if self.results_by_year else year
+        if (year - 1) in self.results_by_year:
+            initial_positions = self._carry_positions(self.results_by_year[year - 1])
+        else:
+            initial_positions = self._manual_positions()
+        positions = {pos.code: Position(code=pos.code, qty=money(pos.qty), cost=q2(pos.cost), category=pos.category, broker=pos.broker) for pos in initial_positions}
+        IRSimpleEngine(year)._apply_events_before_trades(positions, self._events_for_year(self._manual_events(), year, start_year), [])
         daytrade_keys = self._month_daytrade_keys(year, month)
         short_positions: dict[str, dict[str, Any]] = {}
         rows: list[list[str]] = []
@@ -3355,8 +4421,241 @@ class IRSimpleApp:
                 short = short_positions.setdefault(trade.code, {"qty": Decimal("0"), "credit": Decimal("0")})
                 short["qty"] = q2(short["qty"] + sell_remaining)
                 short["credit"] = q2(short["credit"] + sell_remaining_value)
-                if trade.dt.month == month and column == "futuro" and trade.category == "futuro":
-                    rows.append(["negociacao", trade.dt.strftime("%d/%m/%Y"), "venda descoberta aberta", trade.market, trade.code, fmt_decimal(sell_remaining), fmt_money(trade.price), "", "", fmt_money(sell_remaining_value), "", trade.broker])
+                if trade.dt.month == month and include_category(trade.category):
+                    rows.append([
+                        "negociacao",
+                        trade.dt.strftime("%d/%m/%Y"),
+                        "venda descoberta aberta",
+                        trade.market,
+                        trade.code,
+                        fmt_decimal(sell_remaining),
+                        fmt_money(trade.price),
+                        "",
+                        "",
+                        fmt_money(sell_remaining_value),
+                        "",
+                        f"Venda sem posicao suficiente no detalhe. Resultado sera apurado quando houver recompra ou ajuste manual; {trade.broker}",
+                    ])
+        return rows
+
+    def _note_price_lookup(self, year: int, month: int) -> dict[tuple[str, str], dict[str, Decimal]]:
+        lookup: dict[tuple[str, str], dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
+        if PdfReader is None:
+            return lookup
+        for path in self._brokerage_note_files_for_month(year, month):
+            try:
+                reader = PdfReader(str(path))
+                for page in reader.pages:
+                    text = page.extract_text() or ""
+                    note_date_match = re.search(r"(\d{2}/\d{2}/\d{4})\s*Data de refer", text, re.I)
+                    note_date = parse_date(note_date_match.group(1)) if note_date_match else None
+                    if note_date is None:
+                        dates = [parse_date(value) for value in re.findall(r"\d{2}/\d{2}/\d{4}", text)]
+                        note_date = next((value for value in dates if value and value.year == year and value.month == month), None)
+                    if note_date is None:
+                        continue
+                    for code in sorted(set(re.findall(r"\b[A-Z]{4,5}\d{1,4}[A-Z0-9]*\b", text))):
+                        normalized = normalize_ticker(code)
+                        for match in re.finditer(rf"\b{re.escape(code)}\b", text):
+                            snippet = text[match.start(): match.start() + 1400]
+                            buy_match = re.search(r"COMPRA[\s\S]{0,260}?R\$\s*(" + NOTE_PRICE_RE + r")", snippet, re.I)
+                            sell_match = re.search(r"VENDA[\s\S]{0,260}?R\$\s*(" + NOTE_PRICE_RE + r")", snippet, re.I)
+                            avg_buy_match = re.search(r"Pre[cç]o\s+m[eé]dio\s+compra:\s*R\$\s*(" + NOTE_PRICE_RE + r")", snippet, re.I)
+                            avg_sell_match = re.search(r"Pre[cç]o\s+m[eé]dio\s+venda:\s*R\$\s*(" + NOTE_PRICE_RE + r")", snippet, re.I)
+                            key = (note_date.isoformat(), normalized)
+                            if avg_buy_match:
+                                lookup[key]["preco_medio_compra"] = note_price(avg_buy_match.group(1))
+                            elif buy_match:
+                                lookup[key]["preco_medio_compra"] = note_price(buy_match.group(1))
+                            if avg_sell_match:
+                                lookup[key]["preco_medio_venda"] = note_price(avg_sell_match.group(1))
+                            elif sell_match:
+                                lookup[key]["preco_medio_venda"] = note_price(sell_match.group(1))
+            except Exception as exc:
+                debug_log(f"Falha ao ler precos da nota {path}: {exc}")
+        return lookup
+
+    def _with_note_prices(self, rows: list[list[str]], year: int, month: int) -> list[list[str]]:
+        lookup = self._note_price_lookup(year, month)
+        enriched: list[list[str]] = []
+        for row in rows:
+            item = list(row)
+            while len(item) < 12:
+                item.append("")
+            note_buy = ""
+            note_sell = ""
+            dt = parse_date(item[1])
+            code = normalize_ticker(item[4])
+            if dt and code:
+                values = lookup.get((dt.isoformat(), code), {})
+                note_buy = fmt_decimal(values.get("preco_medio_compra")) if values.get("preco_medio_compra") else ""
+                note_sell = fmt_decimal(values.get("preco_medio_venda")) if values.get("preco_medio_venda") else ""
+            item.insert(8, note_buy)
+            item.insert(9, note_sell)
+            enriched.append(item)
+        return enriched
+
+    def _option_detail_rows(self, year: int, month: int) -> list[list[str]]:
+        rows: list[list[str]] = []
+        result = self.results_by_year.get(year)
+        events = self._events_for_year(self._manual_events(), year, min(self.results_by_year) if self.results_by_year else year)
+        resolved = IRSimpleEngine(year)._resolved_option_events(events)
+        resolved_rows = IRSimpleEngine(year)._resolved_option_event_rows(events)
+        cutoff = date(year, 12, 31)
+        positions: dict[str, dict[str, Any]] = {}
+        option_trades = [
+            trade
+            for trade in self.trades
+            if trade.category == "opcoes" and trade.dt <= cutoff and "exercicio" not in normalize_header(trade.market)
+        ]
+        for trade in sorted(option_trades, key=lambda item: (item.dt, item.code, item.side)):
+            pos = positions.setdefault(
+                trade.code,
+                {
+                    "vencimento": trade.expiry,
+                    "long_qty": Decimal("0"),
+                    "long_cost": Decimal("0"),
+                    "short_qty": Decimal("0"),
+                    "short_credit": Decimal("0"),
+                    "ultima_data": trade.dt,
+                    "corretora": trade.broker,
+                },
+            )
+            if trade.expiry and (pos["vencimento"] is None or trade.expiry > pos["vencimento"]):
+                pos["vencimento"] = trade.expiry
+            pos["ultima_data"] = max(pos["ultima_data"], trade.dt)
+            if trade.side == "compra":
+                qty_to_close = min(trade.qty, pos["short_qty"])
+                if qty_to_close > 0:
+                    avg_credit = pos["short_credit"] / pos["short_qty"] if pos["short_qty"] else Decimal("0")
+                    buy_cost = q2(trade.price * qty_to_close)
+                    sale_value = q2(avg_credit * qty_to_close)
+                    profit = q2(sale_value - buy_cost)
+                    if trade.dt.year == year and trade.dt.month == month:
+                        rows.append([
+                            "opcoes",
+                            trade.dt.strftime("%d/%m/%Y"),
+                            "recompra de opcao vendida",
+                            trade.market,
+                            trade.code,
+                            fmt_decimal(qty_to_close),
+                            fmt_money(trade.price),
+                            fmt_money(avg_credit),
+                            fmt_money(buy_cost),
+                            fmt_money(sale_value),
+                            fmt_money(profit),
+                            f"premio medio recebido na venda=R$ {fmt_money(avg_credit)}; recompra=R$ {fmt_money(trade.price)}; {trade.broker}",
+                        ])
+                    pos["short_qty"] = q2(pos["short_qty"] - qty_to_close)
+                    pos["short_credit"] = q2(max(Decimal("0"), pos["short_credit"] - sale_value))
+                remaining = q2(trade.qty - qty_to_close)
+                if remaining > 0:
+                    pos["long_qty"] = q2(pos["long_qty"] + remaining)
+                    pos["long_cost"] = q2(pos["long_cost"] + trade.price * remaining)
+                    if trade.dt.year == year and trade.dt.month == month:
+                        rows.append([
+                            "opcoes",
+                            trade.dt.strftime("%d/%m/%Y"),
+                            "compra abre posicao",
+                            trade.market,
+                            trade.code,
+                            fmt_decimal(remaining),
+                            fmt_money(trade.price),
+                            "",
+                            fmt_money(q2(trade.price * remaining)),
+                            "",
+                            "",
+                            f"premio pago fica em estoque para calcular venda/exercicio/vencimento; {trade.broker}",
+                        ])
+            else:
+                qty_to_close = min(trade.qty, pos["long_qty"])
+                if qty_to_close > 0:
+                    avg_cost = pos["long_cost"] / pos["long_qty"] if pos["long_qty"] else Decimal("0")
+                    sale_value = q2(trade.price * qty_to_close)
+                    cost = q2(avg_cost * qty_to_close)
+                    profit = q2(sale_value - cost)
+                    if trade.dt.year == year and trade.dt.month == month:
+                        rows.append([
+                            "opcoes",
+                            trade.dt.strftime("%d/%m/%Y"),
+                            "venda de opcao comprada",
+                            trade.market,
+                            trade.code,
+                            fmt_decimal(qty_to_close),
+                            fmt_money(trade.price),
+                            fmt_money(avg_cost),
+                            fmt_money(cost),
+                            fmt_money(sale_value),
+                            fmt_money(profit),
+                            f"premio medio pago na compra=R$ {fmt_money(avg_cost)}; venda=R$ {fmt_money(trade.price)}; {trade.broker}",
+                        ])
+                    pos["long_qty"] = q2(pos["long_qty"] - qty_to_close)
+                    pos["long_cost"] = q2(max(Decimal("0"), pos["long_cost"] - cost))
+                remaining = q2(trade.qty - qty_to_close)
+                if remaining > 0:
+                    pos["short_qty"] = q2(pos["short_qty"] + remaining)
+                    pos["short_credit"] = q2(pos["short_credit"] + trade.price * remaining)
+                    if trade.dt.year == year and trade.dt.month == month:
+                        rows.append([
+                            "opcoes",
+                            trade.dt.strftime("%d/%m/%Y"),
+                            "venda abre posicao",
+                            trade.market,
+                            trade.code,
+                            fmt_decimal(remaining),
+                            fmt_money(trade.price),
+                            "",
+                            "",
+                            fmt_money(q2(trade.price * remaining)),
+                            "",
+                            f"premio recebido fica em aberto ate recompra/exercicio/vencimento; {trade.broker}",
+                        ])
+
+        for code, pos in sorted(positions.items()):
+            expiry = pos.get("vencimento")
+            event_type = resolved.get(code)
+            if event_type and any(marker in event_type for marker in ["liquidacao_trava", "trava_sem_acao", "sem_exercicio_acao", "exercicio", "virou_po", "po"]):
+                continue
+            if event_type and ("recompra" in event_type or "recomprada" in event_type):
+                event = resolved_rows.get(code)
+                event_date = parse_date(event.get("data")) if event else None
+                if event and event_date and event_date.year == year and event_date.month == month:
+                    value = q2(event.get("valor"))
+                    qty = abs(money(event.get("quantidade"))) or pos.get("short_qty") or pos.get("long_qty") or Decimal("0")
+                    if pos.get("short_qty", Decimal("0")) > 0:
+                        avg_credit = pos["short_credit"] / pos["short_qty"] if pos["short_qty"] else Decimal("0")
+                        profit = q2(pos["short_credit"] - value)
+                        rows.append(["evento manual", event_date.strftime("%d/%m/%Y"), "recompra informada", "", code, fmt_decimal(qty), fmt_money(value / qty if qty else 0), fmt_money(avg_credit), fmt_money(value), fmt_money(pos["short_credit"]), fmt_money(profit), event.get("observacao", "")])
+                    elif pos.get("long_qty", Decimal("0")) > 0:
+                        avg_cost = pos["long_cost"] / pos["long_qty"] if pos["long_qty"] else Decimal("0")
+                        profit = q2(value - pos["long_cost"])
+                        rows.append(["evento manual", event_date.strftime("%d/%m/%Y"), "venda/recompra informada", "", code, fmt_decimal(qty), fmt_money(value / qty if qty else 0), fmt_money(avg_cost), fmt_money(pos["long_cost"]), fmt_money(value), fmt_money(profit), event.get("observacao", "")])
+                continue
+            if isinstance(expiry, date) and expiry.year == year and expiry.month == month:
+                if pos.get("long_qty", Decimal("0")) > 0 and not (event_type and IRSimpleEngine(year)._is_open_option_event(event_type)):
+                    avg_cost = pos["long_cost"] / pos["long_qty"] if pos["long_qty"] else Decimal("0")
+                    rows.append(["opcoes", expiry.strftime("%d/%m/%Y"), "vencimento virou po", "", code, fmt_decimal(pos["long_qty"]), "", fmt_money(avg_cost), fmt_money(pos["long_cost"]), "0,00", fmt_money(-pos["long_cost"]), "perda do premio medio pago por opcao comprada vencida"])
+                if pos.get("short_qty", Decimal("0")) > 0 and not (event_type and IRSimpleEngine(year)._is_open_option_event(event_type)):
+                    avg_credit = pos["short_credit"] / pos["short_qty"] if pos["short_qty"] else Decimal("0")
+                    rows.append(["opcoes", expiry.strftime("%d/%m/%Y"), "vencimento sem recompra", "", code, fmt_decimal(pos["short_qty"]), "", fmt_money(avg_credit), "0,00", fmt_money(pos["short_credit"]), fmt_money(pos["short_credit"]), "ganho do premio medio recebido por opcao vendida vencida"])
+        if result:
+            calculated = result.monthly[month - 1].options_result
+            detail_total = sum((money(row[10]) for row in rows), Decimal("0"))
+            if q2(detail_total) != q2(calculated):
+                rows.append([
+                    "conferencia",
+                    "",
+                    "diferenca detalhe x calculo",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    fmt_money(q2(calculated - detail_total)),
+                    f"resultado de opcoes no mes=R$ {fmt_money(calculated)}; detalhe listado=R$ {fmt_money(detail_total)}. Pode envolver exercicio de acao-base/evento manual.",
+                ])
         return rows
 
     def _month_detail_rows(self, year: int, month: int, column: str) -> list[list[str]]:
@@ -3372,13 +4671,16 @@ class IRSimpleApp:
             elif column == "base_fii":
                 rows.append(["calculo", "", "Base FII", "", "", "", "", "", "", fmt_money(tax.fii_base), "", f"Resultado {fmt_money(tax.fii_result)}; prejuizo anterior {fmt_money(tax.fii_loss_before)}"])
             elif column == "imposto":
-                rows.append(["calculo", "", "Imposto a pagar", "", "", "", "", "", "", fmt_money(tax.tax_due), "", f"Base comum {fmt_money(tax.normal_base)} x 15%; base DT {fmt_money(tax.daytrade_base)} x 20%; base FII {fmt_money(tax.fii_base)} x 20%"])
-        rows.extend(self._sale_detail_rows(year, month, column))
+                rows.append(["calculo", "", "Imposto a pagar", "", "", "", "", "", "", fmt_money(tax.tax_payable), "", f"Imposto devido {fmt_money(tax.tax_due)} menos IRRF compensavel comum/DT/FII."])
+        if column == "opcoes":
+            rows.extend(self._option_detail_rows(year, month))
+        else:
+            rows.extend(self._sale_detail_rows(year, month, column))
         daytrade_keys = self._month_daytrade_keys(year, month)
         for trade in sorted(self.trades, key=lambda item: (item.dt, item.code, item.side)):
             if not self._trade_matches_month_detail(trade, year, month, column, daytrade_keys):
                 continue
-            if column in {"normal", "base_normal", "fii", "base_fii", "futuro", "daytrade", "base_dt", "imposto"}:
+            if column in {"normal", "base_normal", "fii", "base_fii", "futuro", "daytrade", "base_dt", "imposto", "opcoes"}:
                 continue
             rows.append([
                 "negociacao",
@@ -3416,7 +4718,7 @@ class IRSimpleApp:
                     "",
                     event_row.get("observacao", ""),
                 ])
-        return rows
+        return self._with_note_prices(rows, year, month)
 
     def _show_month_detail_window(self, year: int, month_label: str, column: str, value: str, rows: list[list[str]]) -> None:
         win = tk.Toplevel(self.root)
@@ -3427,26 +4729,135 @@ class IRSimpleApp:
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
-        cols = ["origem", "data", "tipo", "mercado", "ativo", "quantidade", "preco", "preco_medio", "custo", "venda", "lucro", "observacao"]
+        cols = ["origem", "data", "tipo", "mercado", "ativo", "quantidade", "preco_b3", "preco_medio_calc", "preco_medio_nota", "preco_venda_nota", "custo", "venda", "lucro", "observacao"]
         tree = ttk.Treeview(frame, columns=cols, show="headings", height=16)
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
         hsb = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
         tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        for col, width in [("origem", 100), ("data", 90), ("tipo", 140), ("mercado", 130), ("ativo", 80), ("quantidade", 90), ("preco", 90), ("preco_medio", 105), ("custo", 105), ("venda", 105), ("lucro", 105), ("observacao", 320)]:
+        for col, width in [
+            ("origem", 100),
+            ("data", 90),
+            ("tipo", 170),
+            ("mercado", 130),
+            ("ativo", 90),
+            ("quantidade", 90),
+            ("preco_b3", 90),
+            ("preco_medio_calc", 120),
+            ("preco_medio_nota", 120),
+            ("preco_venda_nota", 120),
+            ("custo", 105),
+            ("venda", 105),
+            ("lucro", 105),
+            ("observacao", 380),
+        ]:
             tree.heading(col, text=col)
-            tree.column(col, width=width, anchor="e" if col in {"quantidade", "preco", "preco_medio", "custo", "venda", "lucro"} else "w")
+            tree.column(col, width=width, anchor="e" if col in {"quantidade", "preco_b3", "preco_medio_calc", "preco_medio_nota", "preco_venda_nota", "custo", "venda", "lucro"} else "w")
         total_sale = Decimal("0")
         total_profit = Decimal("0")
         for row in rows:
             if len(row) < len(cols):
                 row = row + [""] * (len(cols) - len(row))
-            total_sale += money(row[9])
-            total_profit += money(row[10])
+            total_sale += money(row[11])
+            total_profit += money(row[12])
             tree.insert("", "end", values=row)
         tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
         hsb.grid(row=1, column=0, sticky="ew")
+        subtotals = self._detail_subtotals(rows)
+        if subtotals:
+            subtotal_text = " | ".join(f"{name}: R$ {fmt_money(total)}" for name, total in subtotals.items())
+            ttk.Label(win, text=f"Subtotais do resultado: {subtotal_text}", foreground="#334155", wraplength=1080).pack(fill="x", padx=10, pady=(0, 6))
+        buttons = ttk.Frame(win)
+        buttons.pack(fill="x", padx=10, pady=(0, 6))
+        ttk.Label(buttons, text="Corrigir suposicao selecionada:").pack(side="left")
+        ttk.Button(buttons, text="Registrar recompra", command=lambda: self._detail_register_option_fix(tree, "opcao recomprada")).pack(side="left", padx=6)
+        ttk.Button(buttons, text="Registrar exercicio", command=lambda: self._detail_register_option_fix(tree, "exercicio de opcoes")).pack(side="left")
+        ttk.Button(buttons, text="Registrar virou po", command=lambda: self._detail_register_option_fix(tree, "opcao virou po")).pack(side="left", padx=6)
+        ttk.Button(buttons, text="Registrar venda ativa", command=lambda: self._detail_register_option_fix(tree, "opcao vendida ainda ativa")).pack(side="left")
+        ttk.Button(buttons, text="Registrar em aberto", command=lambda: self._detail_register_option_fix(tree, "opcao ainda em aberto")).pack(side="left", padx=6)
+        ttk.Button(buttons, text="Registrar posicao/migracao", command=lambda: self._detail_register_position_fix(tree)).pack(side="left", padx=6)
         ttk.Label(win, text=f"Totais do detalhamento: venda R$ {fmt_money(total_sale)} | lucro/prejuizo R$ {fmt_money(total_profit)}", foreground="#0f172a").pack(fill="x", padx=10, pady=(0, 8))
+
+    def _detail_register_option_fix(self, tree: ttk.Treeview, event_type: str) -> None:
+        selected = tree.selection()
+        if not selected:
+            messagebox.showinfo(APP_TITLE, "Selecione uma linha do detalhe para corrigir.")
+            return
+        values = list(tree.item(selected[0], "values"))
+        if len(values) < 6:
+            return
+        code = normalize_ticker(values[4])
+        if not code:
+            messagebox.showinfo(APP_TITLE, "A linha selecionada nao possui ativo/opcao para registrar.")
+            return
+        qty = fmt_decimal(abs(money(values[5])))
+        default_value = values[10] if event_type == "opcao recomprada" else values[11] if len(values) > 11 else "0,00"
+        columns = [
+            ("data", "Data do evento", 90),
+            ("tipo", "Tipo", 170),
+            ("ativo", "Opcao/ativo", 120),
+            ("quantidade", "Quantidade", 100),
+            ("valor", "Valor", 120),
+            ("observacao", "Observacao", 420),
+        ]
+        defaults = [
+            values[1] or date.today().strftime("%d/%m/%Y"),
+            event_type,
+            code,
+            qty,
+            default_value or "0,00",
+            "Correcao lancada pelo detalhe do calculo; substitui suposicao automatica apos recalcular.",
+        ]
+        dialog = RowEditor(self.root, columns, defaults)
+        self.root.wait_window(dialog)
+        if dialog.result is None:
+            return
+        data, tipo, ativo, quantidade, valor, observacao = dialog.result
+        self.event_table.add_row([data, tipo or event_type, ativo or code, quantidade or qty, valor or "0,00", "opcoes", observacao])
+        self._refresh_option_events()
+        self._save_option_events()
+        self.status_var.set(f"Correcao registrada para {ativo or code}. Clique em Recalcular agora.")
+
+    def _detail_register_position_fix(self, tree: ttk.Treeview) -> None:
+        selected = tree.selection()
+        if not selected:
+            messagebox.showinfo(APP_TITLE, "Selecione uma linha do detalhe para registrar uma correcao.")
+            return
+        values = list(tree.item(selected[0], "values"))
+        if len(values) < 6:
+            return
+        code = normalize_ticker(values[4])
+        if not code:
+            messagebox.showinfo(APP_TITLE, "A linha selecionada nao possui ativo.")
+            return
+        qty = fmt_decimal(abs(money(values[5])))
+        unit_cost = values[7] or values[6] or "0,00"
+        total_cost = fmt_money(q2(money(unit_cost) * money(qty)))
+        category = classify_asset(code, values[3] if len(values) > 3 else "")
+        columns = [
+            ("data", "Data", 90),
+            ("tipo", "Tipo", 190),
+            ("ativo", "Ativo", 110),
+            ("quantidade", "Quantidade", 100),
+            ("valor", "Custo/valor total", 130),
+            ("observacao", "Observacao", 420),
+        ]
+        defaults = [
+            values[1] or date.today().strftime("%d/%m/%Y"),
+            "migracao/transferencia",
+            code,
+            qty,
+            total_cost,
+            "Correcao registrada pelo detalhe; use para posicao inicial, migracao, bonificacao, split ou ajuste de custodia.",
+        ]
+        dialog = RowEditor(self.root, columns, defaults)
+        self.root.wait_window(dialog)
+        if dialog.result is None:
+            return
+        data, tipo, ativo, quantidade, valor, observacao = dialog.result
+        self.event_table.add_row([data, tipo or "migracao/transferencia", ativo or code, quantidade or qty, valor or total_cost, category, observacao])
+        self._save_manual_data_to_db()
+        self.status_var.set(f"Correcao patrimonial registrada para {ativo or code}. Clique em Recalcular agora.")
         if not rows:
             ttk.Label(win, text="Nenhum registro individual localizado para esta celula. Verifique eventos manuais e prejuizos acumulados.", foreground="#475569").pack(fill="x", padx=10, pady=(0, 10))
 
@@ -3637,7 +5048,9 @@ class IRSimpleApp:
     def _refresh_results(self) -> None:
         result = self._selected_result()
         if result is None:
+            self.refresh_brokerage_compare_view()
             return
+        self.refresh_brokerage_compare_view()
         self.result = result
         selected_year = result.year
         self.exercise_var.set(
@@ -3661,7 +5074,7 @@ class IRSimpleApp:
                     fmt_money(item.normal_base),
                     fmt_money(item.daytrade_base),
                     fmt_money(item.fii_base),
-                    fmt_money(item.tax_due),
+                    fmt_money(item.tax_payable),
                 ],
             )
         self.warn_text.delete("1.0", "end")
@@ -3689,6 +5102,7 @@ class IRSimpleApp:
         if self.results_by_year:
             self._refresh_history(selected_year)
             self._refresh_monthly_portfolio(selected_year)
+            self._refresh_wealth_view()
             self._refresh_pending_options()
 
     def _refresh_annual_totals(self, result: CalculationResult) -> None:
@@ -3721,7 +5135,7 @@ class IRSimpleApp:
                 m.normal_base,
                 m.daytrade_base,
                 m.fii_base,
-                m.tax_due,
+                m.tax_payable,
             ]
             for m in result.monthly
         ]
@@ -3923,7 +5337,7 @@ class IRSimpleApp:
             month = MONTHS[m.month - 1]
             future_dt = q2(m.future_dollar_daytrade + m.future_index_daytrade)
             future_common = q2(m.future_result - future_dt)
-            common_result = q2((m.normal_result if m.exempt_stock_gain == 0 else Decimal("0")) + m.options_result + future_common)
+            common_result = q2(m.normal_result + m.options_result + future_common)
             daytrade_result = q2(m.daytrade_result + future_dt)
             common_tax = q2(m.normal_base * Decimal("0.15"))
             daytrade_tax = q2(m.daytrade_base * Decimal("0.20"))
@@ -3940,7 +5354,7 @@ class IRSimpleApp:
                     [month, "Resultados", "Aliquota do imposto", "15,00 %", "20,00 %"],
                     [month, "Resultados", "IMPOSTO DEVIDO", fmt_money(common_tax), fmt_money(daytrade_tax)],
                     [month, "Consolidacao do Mes", "Total de imposto devido", fmt_money(m.tax_due), ""],
-                    [month, "Consolidacao do Mes", "Imposto a pagar", fmt_money(m.tax_due), ""],
+                    [month, "Consolidacao do Mes", "Imposto a pagar", fmt_money(m.tax_payable), ""],
                 ]
             )
         return rows
@@ -3949,7 +5363,7 @@ class IRSimpleApp:
         month = MONTHS[m.month - 1]
         future_dt = q2(m.future_dollar_daytrade + m.future_index_daytrade)
         future_common = q2(m.future_result - future_dt)
-        common_result = q2((m.normal_result if m.exempt_stock_gain == 0 else Decimal("0")) + m.options_result + future_common)
+        common_result = q2(m.normal_result + m.options_result + future_common)
         daytrade_result = q2(m.daytrade_result + future_dt)
         common_tax = q2(m.normal_base * Decimal("0.15"))
         daytrade_tax = q2(m.daytrade_base * Decimal("0.20"))
@@ -3979,15 +5393,15 @@ class IRSimpleApp:
             ["Aliquota do imposto", "15%", "20%"],
             ["IMPOSTO DEVIDO", fmt_money(common_tax), fmt_money(daytrade_tax)],
             ["Consolidacao do Mes", "", ""],
-            ["Total do imposto devido", fmt_money(m.tax_due), ""],
-            ["IR fonte de Day Trade no mes", "0,00", ""],
-            ["IR fonte de Day Trade nos meses anteriores", "0,00", ""],
-            ["IR fonte de Day Trade a compensar", "0,00", ""],
-            ["IR fonte(Lei no 11.033/2004) no mes", "0,00", ""],
-            ["IR fonte(Lei no 11.033/2004) nos meses anteriores", "0,00", ""],
-            ["IR fonte(Lei no 11.033/2004) a compensar", "0,00", ""],
-            ["Imposto a pagar", fmt_money(m.tax_due), ""],
-            ["Imposto pago (valor + imposto acumulado + multa + juros)", "0,00", ""],
+            ["Total do imposto devido", fmt_money(common_tax), fmt_money(daytrade_tax)],
+            ["IR fonte de Day Trade no mes", "", fmt_money(m.irrf_daytrade_month)],
+            ["IR fonte de Day Trade nos meses anteriores", "", fmt_money(m.irrf_daytrade_before)],
+            ["IR fonte de Day Trade a compensar", "", fmt_money(m.irrf_daytrade_after)],
+            ["IR fonte(Lei no 11.033/2004) no mes", fmt_money(m.irrf_common_month), ""],
+            ["IR fonte(Lei no 11.033/2004) nos meses anteriores", fmt_money(m.irrf_common_before), ""],
+            ["IR fonte(Lei no 11.033/2004) a compensar", fmt_money(m.irrf_common_after), ""],
+            ["Imposto a pagar", fmt_money(max(Decimal("0"), common_tax - m.irrf_common_before - m.irrf_common_month)), fmt_money(max(Decimal("0"), daytrade_tax - m.irrf_daytrade_before - m.irrf_daytrade_month))],
+            ["Imposto pago (valor + imposto acumulado + multa + juros)", "0,00", "0,00"],
         ]
         self._pdf_table(story, f"Ganhos Liquidos ou Perdas em {month}", ["", "", ""], rows, section_rows={0, 4, 9, 14, 17, 24})
 
@@ -4001,10 +5415,10 @@ class IRSimpleApp:
                 fmt_money(m.fii_loss_after),
                 "20,00 %",
                 fmt_money(m.fii_base * Decimal("0.20")),
-                "0,00",
-                "0,00",
-                "0,00",
-                "0,00",
+                fmt_money(m.irrf_fii_before),
+                fmt_money(m.irrf_fii_month),
+                fmt_money(m.irrf_fii_after),
+                fmt_money(max(Decimal("0"), m.fii_base * Decimal("0.20") - m.irrf_fii_before - m.irrf_fii_month)),
                 "-",
             ]
             for m in result.monthly
