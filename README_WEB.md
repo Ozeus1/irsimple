@@ -19,7 +19,7 @@ sudo apt update
 sudo apt install -y python3-venv python3-pip nginx git
 sudo mkdir -p /opt/irsimple
 sudo chown "$USER":"$USER" /opt/irsimple
-git clone <URL_DO_REPOSITORIO_GITHUB> /opt/irsimple
+git clone https://github.com/Ozeus1/irsimple.git /opt/irsimple
 cd /opt/irsimple
 cp .env.example .env
 nano .env
@@ -48,7 +48,7 @@ O servico usa `/opt/irsimple/.env` e executa `gunicorn -c gunicorn.conf.py wsgi:
 
 ## Nginx e dominio
 
-Edite `deploy/nginx-irsimple.conf` e troque `exemplo.com` pelo seu dominio DNS.
+O arquivo `deploy/nginx-irsimple.conf` ja esta configurado para `ir.casatemporadaceara.cloud`.
 
 ```bash
 sudo cp deploy/nginx-irsimple.conf /etc/nginx/sites-available/irsimple
@@ -61,7 +61,7 @@ Para HTTPS:
 
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d seu-dominio.com -d www.seu-dominio.com
+sudo certbot --nginx -d ir.casatemporadaceara.cloud
 ```
 
 ## Dados e usuarios
@@ -76,7 +76,7 @@ sudo certbot --nginx -d seu-dominio.com -d www.seu-dominio.com
 ## Publicacao no GitHub
 
 ```bash
-git remote add origin https://github.com/SEU_USUARIO/irsimple.git
+git remote add origin https://github.com/Ozeus1/irsimple.git
 git push -u origin master
 ```
 
