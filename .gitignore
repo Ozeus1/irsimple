@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+
+# Ambiente local
+.venv/
+venv/
+env/
+
+# Dados pessoais/importados e artefatos gerados
+*.db
+*.sqlite
+*.sqlite3
+*.log
+irsimple_config.json
+conferencias_opcoes*.json
+*.xlsx
+*.xls
+*.pdf
+
+# Sistema/IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
