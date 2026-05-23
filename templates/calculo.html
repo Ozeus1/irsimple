@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
+{% macro detail_cell(r, column, value) -%}
+  <a class="cell-link" href="{{ url_for('detalhe', year=year, month=r.month, column=column) }}">{{ fmt(value) }}</a>
+{%- endmacro %}
 <h1>Calculo mensal - {{ year }}</h1>
 <div class="toolbar">
   {% for y in years %}<a class="button small" href="{{ url_for('calculo', year=y) }}">{{ y }}</a>{% endfor %}
@@ -12,12 +15,24 @@
     <tbody>
       {% for r in rows %}
       <tr>
-        <td>{{ r.mes }}</td><td>{{ fmt(r.normal) }}</td><td>{{ fmt(r.daytrade) }}</td><td>{{ fmt(r.fii) }}</td><td>{{ fmt(r.opcoes) }}</td><td>{{ fmt(r.futuro) }}</td>
-        <td>{{ fmt(r.base_normal) }}</td><td>{{ fmt(r.base_dt) }}</td><td>{{ fmt(r.base_fii) }}</td><td>{{ fmt(r.irrf_comum) }}</td><td>{{ fmt(r.irrf_dt) }}</td><td>{{ fmt(r.irrf_fii) }}</td><td>{{ fmt(r.imposto) }}</td>
+        <td>{{ r.mes }}</td>
+        <td>{{ detail_cell(r, "normal", r.normal) }}</td>
+        <td>{{ detail_cell(r, "daytrade", r.daytrade) }}</td>
+        <td>{{ detail_cell(r, "fii", r.fii) }}</td>
+        <td>{{ detail_cell(r, "opcoes", r.opcoes) }}</td>
+        <td>{{ detail_cell(r, "futuro", r.futuro) }}</td>
+        <td>{{ detail_cell(r, "base_normal", r.base_normal) }}</td>
+        <td>{{ detail_cell(r, "base_dt", r.base_dt) }}</td>
+        <td>{{ detail_cell(r, "base_fii", r.base_fii) }}</td>
+        <td>{{ detail_cell(r, "irrf_comum", r.irrf_comum) }}</td>
+        <td>{{ detail_cell(r, "irrf_dt", r.irrf_dt) }}</td>
+        <td>{{ detail_cell(r, "irrf_fii", r.irrf_fii) }}</td>
+        <td>{{ detail_cell(r, "imposto", r.imposto) }}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  <p class="hint">Clique em qualquer valor para abrir os registros que formaram o calculo daquele mes e coluna.</p>
 </section>
 <section class="panel">
   <h2>Alertas</h2>

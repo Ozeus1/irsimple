@@ -14,9 +14,11 @@ env/
 irsimple_config.json
 conferencias_opcoes*.json
 web_uploads/
+notas/
 *.xlsx
 *.xls
 *.pdf
+*.zip
 
 # Sistema/IDE
 .DS_Store

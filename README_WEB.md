@@ -12,17 +12,57 @@ python web_app.py
 
 Acesse `http://127.0.0.1:5050`.
 
-## Execucao em VPS Linux
+## Preparacao para VPS Linux
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements-web.txt
-export IRSIMPLE_SECRET_KEY="troque-esta-chave"
-gunicorn -w 2 -b 0.0.0.0:5050 web_app:app
+sudo apt update
+sudo apt install -y python3-venv python3-pip nginx git
+sudo mkdir -p /opt/irsimple
+sudo chown "$USER":"$USER" /opt/irsimple
+git clone <URL_DO_REPOSITORIO_GITHUB> /opt/irsimple
+cd /opt/irsimple
+cp .env.example .env
+nano .env
 ```
 
-Use Nginx/Apache como proxy reverso para HTTPS.
+Configure pelo menos `IRSIMPLE_SECRET_KEY` com uma chave longa.
+
+## Execucao manual na VPS
+
+```bash
+cd /opt/irsimple
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-web.txt
+gunicorn -c gunicorn.conf.py wsgi:app
+```
+
+## Servico systemd
+
+```bash
+cd /opt/irsimple
+bash deploy/deploy_vps.sh
+```
+
+O servico usa `/opt/irsimple/.env` e executa `gunicorn -c gunicorn.conf.py wsgi:app`.
+
+## Nginx e dominio
+
+Edite `deploy/nginx-irsimple.conf` e troque `exemplo.com` pelo seu dominio DNS.
+
+```bash
+sudo cp deploy/nginx-irsimple.conf /etc/nginx/sites-available/irsimple
+sudo ln -s /etc/nginx/sites-available/irsimple /etc/nginx/sites-enabled/irsimple
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Para HTTPS:
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d seu-dominio.com -d www.seu-dominio.com
+```
 
 ## Dados e usuarios
 
@@ -30,6 +70,15 @@ Use Nginx/Apache como proxy reverso para HTTPS.
 - Os registros sao associados ao usuario informado na tela inicial.
 - Uploads ficam em `web_uploads/<usuario>/`.
 - Para producao, proteja `irsimple.db` e `web_uploads/` com backup e permissoes restritas.
+- Recomenda-se backup diario de `irsimple.db` e `web_uploads/`.
+- O login atual isola dados por nome de usuario, mas ainda nao possui senha. Antes de abrir ao publico, inclua autenticacao com senha.
+
+## Publicacao no GitHub
+
+```bash
+git remote add origin https://github.com/SEU_USUARIO/irsimple.git
+git push -u origin master
+```
 
 ## Funcoes web incluidas
 

@@ -8,6 +8,23 @@
   </form>
 </section>
 <section class="panel">
-  <table><thead><tr><th>Data</th><th>Nota</th><th>IRRF comum</th><th>IRRF DT</th><th>IRRF FII</th><th>Base</th><th>Arquivo</th></tr></thead><tbody>{% for r in rows %}<tr><td>{{ r.trade_date }}</td><td>{{ r.note_number }}</td><td>{{ fmt(r.irrf_common) }}</td><td>{{ fmt(r.irrf_daytrade) }}</td><td>{{ fmt(r.irrf_fii) }}</td><td>{{ fmt(r.irrf_base) }}</td><td>{{ r.source_file }}</td></tr>{% endfor %}</tbody></table>
+  <table>
+    <thead>
+      <tr><th>Data</th><th>Nota</th><th>IRRF comum</th><th>IRRF DT</th><th>IRRF FII</th><th>Base</th><th>Arquivo</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.trade_date }}</td>
+        <td>{{ r.note_number }}</td>
+        <td>{{ fmt(r.irrf_common) }}</td>
+        <td>{{ fmt(r.irrf_daytrade) }}</td>
+        <td>{{ fmt(r.irrf_fii) }}</td>
+        <td>{{ fmt(r.irrf_base) }}</td>
+        <td><a class="file-link" href="{{ url_for('download_nota', note_id=r.id) }}">{{ r.source_file|basename }}</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </section>
 {% endblock %}

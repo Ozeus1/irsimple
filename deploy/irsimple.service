@@ -1,0 +1,15 @@
+[Unit]
+Description=IRSimple Web
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/irsimple
+EnvironmentFile=/opt/irsimple/.env
+ExecStart=/opt/irsimple/.venv/bin/gunicorn -c /opt/irsimple/gunicorn.conf.py wsgi:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

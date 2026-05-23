@@ -32,6 +32,17 @@ app = Flask(__name__)
 app.secret_key = SECRET_KEY
 
 
+@app.template_filter("basename")
+def basename_filter(value: Any) -> str:
+    return Path(str(value or "")).name
+
+
+@app.template_filter("date_input")
+def date_input_filter(value: Any) -> str:
+    parsed = core.parse_date(value)
+    return parsed.isoformat() if parsed else str(value or "")
+
+
 def current_username() -> str:
     username = session.get("username") or core.DEFAULT_USER
     return str(username).strip() or core.DEFAULT_USER
@@ -551,6 +562,401 @@ def monthly_rows(result: core.CalculationResult) -> list[dict[str, Any]]:
     return rows
 
 
+def month_daytrade_keys(trades: list[core.Trade], year: int, month: int) -> set[tuple[date, str, str, str]]:
+    grouped: dict[tuple[date, str, str, str], set[str]] = defaultdict(set)
+    for trade in trades:
+        if trade.dt.year == year and trade.dt.month == month:
+            grouped[(trade.dt, trade.code, trade.category, trade.broker)].add(trade.side)
+    return {key for key, sides in grouped.items() if {"compra", "venda"}.issubset(sides)}
+
+
+def daytrade_detail_rows(trades: list[core.Trade], year: int, month: int, include_future: bool | None = None) -> list[dict[str, Any]]:
+    rows = []
+    grouped: dict[tuple[date, str, str, str], list[core.Trade]] = defaultdict(list)
+    for trade in trades:
+        if trade.dt.year == year and trade.dt.month == month:
+            grouped[(trade.dt, trade.code, trade.category, trade.broker)].append(trade)
+    for (_dt, _code, _category, _broker), group in sorted(grouped.items()):
+        buys = [item for item in group if item.side == "compra"]
+        sells = [item for item in group if item.side == "venda"]
+        buy_qty = sum((item.qty for item in buys), Decimal("0"))
+        sell_qty = sum((item.qty for item in sells), Decimal("0"))
+        qty = min(buy_qty, sell_qty)
+        if qty <= 0:
+            continue
+        sample = group[0]
+        is_future = sample.category == "futuro"
+        if include_future is True and not is_future:
+            continue
+        if include_future is False and is_future:
+            continue
+        buy_avg = sum((item.value for item in buys), Decimal("0")) / buy_qty if buy_qty else Decimal("0")
+        sell_avg = sum((item.value for item in sells), Decimal("0")) / sell_qty if sell_qty else Decimal("0")
+        sale = q2(sell_avg * qty)
+        cost = q2(buy_avg * qty)
+        rows.append(
+            {
+                "origem": "day trade",
+                "data": sample.dt.strftime("%d/%m/%Y"),
+                "tipo": "compra/venda",
+                "mercado": sample.market,
+                "ativo": sample.code,
+                "quantidade": qty,
+                "preco": sell_avg,
+                "preco_medio": buy_avg,
+                "custo": cost,
+                "venda": sale,
+                "lucro": q2(sale - cost),
+                "observacao": sample.broker,
+            }
+        )
+    return rows
+
+
+def include_detail_category(column: str, category: str) -> bool:
+    if column in {"normal", "base_normal"}:
+        return category not in {"fii", "opcoes", "futuro"}
+    if column in {"fii", "base_fii"}:
+        return category == "fii"
+    if column == "futuro":
+        return category == "futuro"
+    return False
+
+
+def sale_detail_rows(results: dict[int, core.CalculationResult], trades: list[core.Trade], year: int, month: int, column: str) -> list[dict[str, Any]]:
+    if column in {"daytrade", "base_dt"}:
+        return daytrade_detail_rows(trades, year, month, include_future=False)
+    if column == "futuro":
+        return daytrade_detail_rows(trades, year, month, include_future=True)
+    if column not in {"normal", "base_normal", "fii", "base_fii"}:
+        return []
+
+    if (year - 1) in results:
+        initial_positions = carry_positions(results[year - 1])
+    else:
+        initial_positions = load_positions()
+    positions = {
+        pos.code: core.Position(code=pos.code, qty=money(pos.qty), cost=q2(pos.cost), category=pos.category, broker=pos.broker)
+        for pos in initial_positions
+    }
+    start_year = min(results) if results else year
+    core.IRSimpleEngine(year)._apply_events_before_trades(positions, events_for_year(load_events(), year, start_year), [])
+    daytrade_keys = month_daytrade_keys(trades, year, month)
+    short_positions: dict[str, dict[str, Decimal]] = {}
+    rows: list[dict[str, Any]] = []
+    for trade in sorted([t for t in trades if t.dt.year == year and t.category != "opcoes"], key=lambda item: (item.dt, item.code, item.side)):
+        if (trade.dt, trade.code, trade.category, trade.broker) in daytrade_keys:
+            continue
+        pos = positions.setdefault(trade.code, core.Position(code=trade.code, category=trade.category, broker=trade.broker))
+        if trade.side == "compra":
+            remaining_qty = trade.qty
+            remaining_value = trade.value
+            short = short_positions.get(trade.code)
+            if short and short["qty"] > 0:
+                cover_qty = min(remaining_qty, short["qty"])
+                cover_cost = q2(trade.value * cover_qty / trade.qty) if trade.qty else Decimal("0")
+                cover_credit = q2(short["credit"] * cover_qty / short["qty"]) if short["qty"] else Decimal("0")
+                if trade.dt.month == month and include_detail_category(column, trade.category):
+                    rows.append(
+                        {
+                            "origem": "negociacao",
+                            "data": trade.dt.strftime("%d/%m/%Y"),
+                            "tipo": "recompra venda descoberta",
+                            "mercado": trade.market,
+                            "ativo": trade.code,
+                            "quantidade": cover_qty,
+                            "preco": cover_credit / cover_qty if cover_qty else Decimal("0"),
+                            "preco_medio": cover_cost / cover_qty if cover_qty else Decimal("0"),
+                            "custo": cover_cost,
+                            "venda": cover_credit,
+                            "lucro": q2(cover_credit - cover_cost),
+                            "observacao": trade.broker,
+                        }
+                    )
+                short["qty"] = q2(short["qty"] - cover_qty)
+                short["credit"] = q2(short["credit"] - cover_credit)
+                remaining_qty = q2(remaining_qty - cover_qty)
+                remaining_value = q2(remaining_value - cover_cost)
+                if short["qty"] <= 0:
+                    del short_positions[trade.code]
+            if remaining_qty > 0:
+                pos.qty += remaining_qty
+                pos.cost = q2(pos.cost + remaining_value)
+            continue
+
+        sell_remaining = trade.qty
+        sell_remaining_value = trade.value
+        if pos.qty > 0:
+            covered_qty = min(pos.qty, sell_remaining)
+            sale_value = q2(trade.value * covered_qty / trade.qty) if trade.qty else Decimal("0")
+            avg = pos.avg_price
+            cost = q2(avg * covered_qty)
+            if trade.dt.month == month and include_detail_category(column, trade.category):
+                rows.append(
+                    {
+                        "origem": "negociacao",
+                        "data": trade.dt.strftime("%d/%m/%Y"),
+                        "tipo": trade.side,
+                        "mercado": trade.market,
+                        "ativo": trade.code,
+                        "quantidade": covered_qty,
+                        "preco": trade.price,
+                        "preco_medio": avg,
+                        "custo": cost,
+                        "venda": sale_value,
+                        "lucro": q2(sale_value - cost),
+                        "observacao": trade.broker,
+                    }
+                )
+            pos.qty = q2(pos.qty - covered_qty)
+            pos.cost = q2(max(Decimal("0"), pos.cost - cost))
+            sell_remaining = q2(sell_remaining - covered_qty)
+            sell_remaining_value = q2(sell_remaining_value - sale_value)
+            if pos.qty <= 0:
+                pos.qty = Decimal("0")
+                pos.cost = Decimal("0")
+        if sell_remaining > 0:
+            short = short_positions.setdefault(trade.code, {"qty": Decimal("0"), "credit": Decimal("0")})
+            short["qty"] = q2(short["qty"] + sell_remaining)
+            short["credit"] = q2(short["credit"] + sell_remaining_value)
+            if trade.dt.month == month and include_detail_category(column, trade.category):
+                rows.append(
+                    {
+                        "origem": "negociacao",
+                        "data": trade.dt.strftime("%d/%m/%Y"),
+                        "tipo": "venda descoberta aberta",
+                        "mercado": trade.market,
+                        "ativo": trade.code,
+                        "quantidade": sell_remaining,
+                        "preco": trade.price,
+                        "preco_medio": "",
+                        "custo": "",
+                        "venda": sell_remaining_value,
+                        "lucro": "",
+                        "observacao": "Resultado apurado quando houver recompra ou ajuste manual.",
+                    }
+                )
+    return rows
+
+
+def option_detail_rows(trades: list[core.Trade], events: list[dict[str, Any]], year: int, month: int) -> list[dict[str, Any]]:
+    rows = []
+    for trade in sorted(trades, key=lambda item: (item.dt, item.code, item.side)):
+        if trade.dt.year == year and trade.dt.month == month and trade.category == "opcoes":
+            rows.append(
+                {
+                    "origem": "negociacao",
+                    "data": trade.dt.strftime("%d/%m/%Y"),
+                    "tipo": trade.side,
+                    "mercado": trade.market,
+                    "ativo": trade.code,
+                    "quantidade": trade.qty,
+                    "preco": trade.price,
+                    "preco_medio": "",
+                    "custo": trade.value if trade.side == "compra" else "",
+                    "venda": trade.value if trade.side == "venda" else "",
+                    "lucro": "",
+                    "observacao": "Linha operacional; o lucro de opcoes usa pareamento por premio medio no motor.",
+                }
+            )
+    for event in events:
+        dt = core.parse_date(event.get("data"))
+        kind = core.normalize_header(event.get("tipo"))
+        if dt and dt.year == year and dt.month == month and ("opcao" in kind or "exercicio" in kind):
+            rows.append(
+                {
+                    "origem": "evento manual",
+                    "data": dt.strftime("%d/%m/%Y"),
+                    "tipo": event.get("tipo", ""),
+                    "mercado": "",
+                    "ativo": event.get("ativo", ""),
+                    "quantidade": money(event.get("quantidade")),
+                    "preco": "",
+                    "preco_medio": "",
+                    "custo": "",
+                    "venda": money(event.get("valor")),
+                    "lucro": "",
+                    "observacao": event.get("observacao", ""),
+                }
+            )
+    return rows
+
+
+DETAIL_LABELS = {
+    "normal": "Operacoes normais",
+    "daytrade": "Day trade",
+    "fii": "FII/FIAGRO",
+    "opcoes": "Opcoes",
+    "futuro": "Mercado futuro",
+    "base_normal": "Base normal",
+    "base_dt": "Base day trade",
+    "base_fii": "Base FII/FIAGRO",
+    "irrf_comum": "IRRF comum",
+    "irrf_dt": "IRRF day trade",
+    "irrf_fii": "IRRF FII",
+    "imposto": "Imposto",
+}
+
+
+def detail_summary_row(result: core.CalculationResult, month: int, column: str) -> list[dict[str, Any]]:
+    tax = result.monthly[month - 1]
+    if column == "base_normal":
+        return [
+            {
+                "origem": "calculo",
+                "data": "",
+                "tipo": "Base normal",
+                "mercado": "",
+                "ativo": "",
+                "quantidade": "",
+                "preco": "",
+                "preco_medio": "",
+                "custo": "",
+                "venda": tax.normal_base,
+                "lucro": "",
+                "observacao": (
+                    f"Resultado normal R$ {fmt(tax.normal_result)}; opcoes R$ {fmt(tax.options_result)}; "
+                    f"futuro comum R$ {fmt(tax.future_result)}; prejuizo anterior R$ {fmt(tax.normal_loss_before)}."
+                ),
+            }
+        ]
+    if column == "base_dt":
+        future_dt = q2(tax.future_dollar_daytrade + tax.future_index_daytrade)
+        return [
+            {
+                "origem": "calculo",
+                "data": "",
+                "tipo": "Base day trade",
+                "mercado": "",
+                "ativo": "",
+                "quantidade": "",
+                "preco": "",
+                "preco_medio": "",
+                "custo": "",
+                "venda": tax.daytrade_base,
+                "lucro": "",
+                "observacao": (
+                    f"Resultado day trade R$ {fmt(tax.daytrade_result)}; futuro day trade R$ {fmt(future_dt)}; "
+                    f"prejuizo anterior R$ {fmt(tax.daytrade_loss_before)}."
+                ),
+            }
+        ]
+    if column == "base_fii":
+        return [
+            {
+                "origem": "calculo",
+                "data": "",
+                "tipo": "Base FII/FIAGRO",
+                "mercado": "",
+                "ativo": "",
+                "quantidade": "",
+                "preco": "",
+                "preco_medio": "",
+                "custo": "",
+                "venda": tax.fii_base,
+                "lucro": "",
+                "observacao": f"Resultado FII R$ {fmt(tax.fii_result)}; prejuizo anterior R$ {fmt(tax.fii_loss_before)}.",
+            }
+        ]
+    if column == "imposto":
+        return [
+            {
+                "origem": "calculo",
+                "data": "",
+                "tipo": "Imposto a pagar",
+                "mercado": "",
+                "ativo": "",
+                "quantidade": "",
+                "preco": "",
+                "preco_medio": "",
+                "custo": "",
+                "venda": tax.tax_payable,
+                "lucro": "",
+                "observacao": (
+                    f"Imposto devido R$ {fmt(tax.tax_due)}; IRRF comum no mes R$ {fmt(tax.irrf_common_month)}; "
+                    f"IRRF DT no mes R$ {fmt(tax.irrf_daytrade_month)}; IRRF FII no mes R$ {fmt(tax.irrf_fii_month)}."
+                ),
+            }
+        ]
+    return []
+
+
+def irrf_detail_rows(year: int, month: int, column: str) -> list[dict[str, Any]]:
+    field_by_column = {
+        "irrf_comum": "irrf_common",
+        "irrf_dt": "irrf_daytrade",
+        "irrf_fii": "irrf_fii",
+    }
+    field = field_by_column.get(column)
+    if not field:
+        return []
+    rows = db_rows(
+        f"""
+        SELECT trade_date, note_number, source_file, {field} AS value
+        FROM brokerage_note_taxes
+        WHERE user_id = ? AND substr(trade_date, 1, 7) = ?
+        ORDER BY trade_date, note_number, id
+        """,
+        (current_user_id(), f"{year}-{month:02d}"),
+    )
+    result = []
+    for row in rows:
+        value = money(row["value"])
+        if value == 0:
+            continue
+        dt = core.parse_date(row["trade_date"])
+        result.append(
+            {
+                "origem": "nota",
+                "data": dt.strftime("%d/%m/%Y") if dt else row["trade_date"],
+                "tipo": DETAIL_LABELS.get(column, column),
+                "mercado": "",
+                "ativo": "",
+                "quantidade": "",
+                "preco": "",
+                "preco_medio": "",
+                "custo": "",
+                "venda": value,
+                "lucro": "",
+                "observacao": f"Nota {row['note_number'] or ''} - {Path(str(row['source_file'] or '')).name}",
+            }
+        )
+    return result
+
+
+def detail_rows(results: dict[int, core.CalculationResult], year: int, month: int, column: str) -> list[dict[str, Any]]:
+    result = results[year]
+    trades = load_trades()
+    movements = load_movements()
+    category_map = core.infer_categories_from_movements(movements)
+    for trade in trades:
+        if trade.code in category_map and trade.category == "normal":
+            trade.category = category_map[trade.code]
+    events = load_events()
+
+    if column in {"irrf_comum", "irrf_dt", "irrf_fii"}:
+        return irrf_detail_rows(year, month, column)
+
+    rows = detail_summary_row(result, month, column)
+    if column == "opcoes":
+        rows.extend(option_detail_rows(trades, events_for_year(events, year, min(results) if results else year), year, month))
+    elif column == "imposto":
+        rows.extend(irrf_detail_rows(year, month, "irrf_comum"))
+        rows.extend(irrf_detail_rows(year, month, "irrf_dt"))
+        rows.extend(irrf_detail_rows(year, month, "irrf_fii"))
+    else:
+        rows.extend(sale_detail_rows(results, trades, year, month, column))
+    return rows
+
+
+def detail_totals(rows: list[dict[str, Any]]) -> dict[str, Decimal]:
+    return {
+        "custo": q2(sum((money(row.get("custo")) for row in rows), Decimal("0"))),
+        "venda": q2(sum((money(row.get("venda")) for row in rows), Decimal("0"))),
+        "lucro": q2(sum((money(row.get("lucro")) for row in rows), Decimal("0"))),
+    }
+
+
 def brokerage_summary(year: int) -> dict[int, defaultdict[str, Decimal]]:
     rows = db_rows(
         """
@@ -764,10 +1170,26 @@ def notas() -> str | Response:
             flash(f"Notas processadas: {len(notes)}. Novas: {inserted}. Atualizadas: {updated}. Duplicadas no lote: {skipped}.", "success")
         return redirect(url_for("notas"))
     rows = db_rows(
-        "SELECT trade_date, note_number, irrf_common, irrf_daytrade, irrf_fii, irrf_base, source_file FROM brokerage_note_taxes WHERE user_id = ? ORDER BY trade_date DESC, id DESC LIMIT 300",
+        "SELECT id, trade_date, note_number, irrf_common, irrf_daytrade, irrf_fii, irrf_base, source_file FROM brokerage_note_taxes WHERE user_id = ? ORDER BY trade_date DESC, id DESC LIMIT 300",
         (current_user_id(),),
     )
     return render_template("notas.html", rows=rows)
+
+
+@app.route("/notas/<int:note_id>/download")
+def download_nota(note_id: int) -> Response:
+    rows = db_rows(
+        "SELECT source_file FROM brokerage_note_taxes WHERE user_id = ? AND id = ?",
+        (current_user_id(), note_id),
+    )
+    if not rows:
+        flash("Nota nao encontrada para o usuario atual.", "warning")
+        return redirect(url_for("notas"))
+    path = Path(str(rows[0]["source_file"] or ""))
+    if not path.exists() or path.suffix.lower() != ".pdf":
+        flash("Arquivo PDF da nota nao foi encontrado.", "warning")
+        return redirect(url_for("notas"))
+    return send_file(path, as_attachment=True, download_name=path.name, mimetype="application/pdf")
 
 
 @app.route("/manual", methods=["GET", "POST"])
@@ -828,6 +1250,36 @@ def calculo() -> str:
         rows=monthly_rows(result),
         summary=result_summary(result),
         warnings=result.warnings,
+    )
+
+
+@app.route("/detalhe")
+def detalhe() -> str | Response:
+    results = require_results()
+    if not results:
+        return redirect(url_for("dashboard"))
+    year = int(request.args.get("year") or selected_year(results))
+    month = int(request.args.get("month") or 1)
+    column = request.args.get("column", "normal")
+    if year not in results:
+        flash("Ano sem calculo disponivel.", "warning")
+        return redirect(url_for("calculo"))
+    if month < 1 or month > 12:
+        flash("Mes invalido para detalhamento.", "warning")
+        return redirect(url_for("calculo", year=year))
+    if column not in DETAIL_LABELS:
+        flash("Coluna invalida para detalhamento.", "warning")
+        return redirect(url_for("calculo", year=year))
+    rows = detail_rows(results, year, month, column)
+    return render_template(
+        "detalhe.html",
+        year=year,
+        month=month,
+        month_name=core.MONTHS[month - 1],
+        column=column,
+        label=DETAIL_LABELS[column],
+        rows=rows,
+        totals=detail_totals(rows),
     )
 
 
@@ -987,51 +1439,210 @@ def export_pdf() -> Response:
     if core.SimpleDocTemplate is None:
         flash("reportlab nao esta instalado.", "danger")
         return redirect(url_for("calculo"))
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.units import cm
+    from reportlab.platypus import PageBreak, SimpleDocTemplate
 
     results = require_results()
     year = int(request.args.get("year") or selected_year(results))
     result = results[year]
     output = io.BytesIO()
-    doc = SimpleDocTemplate(output, pagesize=A4, rightMargin=24, leftMargin=24, topMargin=24, bottomMargin=24)
+    doc = SimpleDocTemplate(output, pagesize=landscape(A4), leftMargin=1 * cm, rightMargin=1 * cm, topMargin=1 * cm, bottomMargin=1 * cm)
     styles = getSampleStyleSheet()
-    story = [Paragraph(f"IRSimple Web - Ano base {year} - Exercicio {year + 1}", styles["Title"]), Spacer(1, 10)]
-    monthly = [["Mes", "Normal", "DT", "FII", "Opcoes", "Futuro", "Imposto"]]
-    for row in monthly_rows(result):
-        monthly.append([row["mes"], fmt(row["normal"]), fmt(row["daytrade"]), fmt(row["fii"]), fmt(row["opcoes"]), fmt(row["futuro"]), fmt(row["imposto"])])
-    add_pdf_table(story, "Calculo mensal", monthly)
-    rows = annual_rows(result)
-    for title, table_rows in [("Bens e Direitos", rows["bens"]), ("Rendimentos Isentos", rows["isentos"]), ("Rendimentos Sujeitos Exclusiva", rows["sujeitos"]), ("Dividas e Onus", rows["dividas"])]:
+    story: list[Any] = []
+
+    pdf_header(story, styles, "Impostos em Renda Variavel", year)
+    for idx, month in enumerate(result.monthly):
+        if idx:
+            story.append(PageBreak())
+            pdf_header(story, styles, "Impostos em Renda Variavel", year)
+        pdf_variable_month(story, month)
+
+    story.append(PageBreak())
+    pdf_header(story, styles, "Fundos Imobiliarios", year)
+    pdf_fii_monthly(story, result)
+
+    annual = annual_rows(result)
+    previous_year = year - 1
+    for key, title, headers in [
+        ("bens", "Bens e Direitos", ["Codigo", "CNPJ", "Discriminacao", f"Qtd em 31/12/{previous_year}", f"Situacao em 31/12/{previous_year}", f"Qtd em 31/12/{year}", f"Situacao em 31/12/{year}"]),
+        ("isentos", "Rendimentos Isentos e Nao Tributaveis", ["Codigo", "CNPJ", "Descricao", "Valor"]),
+        ("sujeitos", "Rendimentos Sujeitos a Tributacao Exclusiva", ["Codigo", "CNPJ", "Descricao", "Valor"]),
+        ("dividas", "Onus e Dividas", ["Codigo", "CNPJ", "Discriminacao", f"Situacao em 31/12/{previous_year}", f"Situacao em 31/12/{year}", f"Valor pago em {year}"]),
+    ]:
         story.append(PageBreak())
-        add_pdf_table(story, title, table_rows[:200] or [["Sem registros"]])
+        pdf_header(story, styles, title, year)
+        pdf_table(story, title, headers, annual[key])
+
+    pdf_consolidated_reports(story, styles, year)
     doc.build(story)
     output.seek(0)
-    return send_file(output, as_attachment=True, download_name=f"IRSimple_web_{year}.pdf", mimetype="application/pdf")
+    return send_file(output, as_attachment=True, download_name=f"IRSimple_exercicio_{year + 1}_ano_base_{year}.pdf", mimetype="application/pdf")
 
 
-def add_pdf_table(story: list[Any], title: str, rows: list[list[Any]]) -> None:
+def pdf_header(story: list[Any], styles: Any, subtitle: str, year: int) -> None:
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, Spacer
+
+    cfg = app_config()
+    story.append(Paragraph("DECLARACAO ANUAL DE IMPOSTO DE RENDA", styles["Title"]))
+    story.append(Paragraph(f"Nome: {cfg.get('name') or '-'}", styles["Normal"]))
+    story.append(Paragraph(f"{subtitle} - Ano base: {year} - Exercicio: {year + 1}", styles["Heading2"]))
+    story.append(Spacer(1, 0.25 * cm))
+
+
+def pdf_variable_month(story: list[Any], m: core.MonthlyTax) -> None:
+    month = core.MONTHS[m.month - 1]
+    future_dt = q2(m.future_dollar_daytrade + m.future_index_daytrade)
+    future_common = q2(m.future_result - future_dt)
+    common_result = q2(m.normal_result + m.options_result + future_common)
+    daytrade_result = q2(m.daytrade_result + future_dt)
+    common_tax = q2(m.normal_base * Decimal("0.15"))
+    daytrade_tax = q2(m.daytrade_base * Decimal("0.20"))
+    rows = [
+        ["Mercado a Vista", "Operacoes Comuns", "Day Trade"],
+        ["Mercado a vista - acoes", fmt(m.normal_result), fmt(m.daytrade_result)],
+        ["Mercado a vista - ouro", "-", "-"],
+        ["Mercado a vista - ouro at. fin. fora bolsa", "-", "-"],
+        ["Mercado de Opcoes", "Operacoes Comuns", "Day Trade"],
+        ["Mercado opcoes - acoes", fmt(m.options_result), "-"],
+        ["Mercado opcoes - ouro", "-", "-"],
+        ["Mercado opcoes - fora de bolsa", "-", "-"],
+        ["Mercado opcoes - outros", "-", "-"],
+        ["Mercado Futuro", "Operacoes Comuns", "Day Trade"],
+        ["Mercado futuro - dolar dos EUA", fmt(m.future_dollar_common), fmt(m.future_dollar_daytrade)],
+        ["Mercado futuro - indices", fmt(m.future_index_common), fmt(m.future_index_daytrade)],
+        ["Mercado futuro - juros", "-", "-"],
+        ["Mercado futuro - outros", fmt(q2(future_common - m.future_dollar_common - m.future_index_common)), fmt(q2(future_dt - m.future_dollar_daytrade - m.future_index_daytrade))],
+        ["Mercado a Termo", "Operacoes Comuns", "Day Trade"],
+        ["Mercado a termo - acoes/ouro", "-", "-"],
+        ["Mercado a termo - outros", "-", "-"],
+        ["Resultados", "Operacoes Comuns", "Day Trade"],
+        ["RESULTADO LIQUIDO DO MES", fmt(common_result), fmt(daytrade_result)],
+        ["Resultado negativo ate o mes anterior", fmt(m.normal_loss_before), fmt(m.daytrade_loss_before)],
+        ["BASE DE CALCULO DO IMPOSTO", fmt(m.normal_base), fmt(m.daytrade_base)],
+        ["Prejuizo a compensar", fmt(m.normal_loss_after), fmt(m.daytrade_loss_after)],
+        ["Aliquota do imposto", "15%", "20%"],
+        ["IMPOSTO DEVIDO", fmt(common_tax), fmt(daytrade_tax)],
+        ["Consolidacao do Mes", "", ""],
+        ["Total do imposto devido", fmt(common_tax), fmt(daytrade_tax)],
+        ["IR fonte de Day Trade no mes", "", fmt(m.irrf_daytrade_month)],
+        ["IR fonte de Day Trade nos meses anteriores", "", fmt(m.irrf_daytrade_before)],
+        ["IR fonte de Day Trade a compensar", "", fmt(m.irrf_daytrade_after)],
+        ["IR fonte(Lei no 11.033/2004) no mes", fmt(m.irrf_common_month), ""],
+        ["IR fonte(Lei no 11.033/2004) nos meses anteriores", fmt(m.irrf_common_before), ""],
+        ["IR fonte(Lei no 11.033/2004) a compensar", fmt(m.irrf_common_after), ""],
+        ["Imposto a pagar", fmt(max(Decimal("0"), common_tax - m.irrf_common_before - m.irrf_common_month)), fmt(max(Decimal("0"), daytrade_tax - m.irrf_daytrade_before - m.irrf_daytrade_month))],
+        ["Imposto pago (valor + imposto acumulado + multa + juros)", "0,00", "0,00"],
+    ]
+    pdf_table(story, f"Ganhos Liquidos ou Perdas em {month}", ["", "", ""], rows, section_rows={0, 4, 9, 14, 17, 24})
+
+
+def pdf_fii_monthly(story: list[Any], result: core.CalculationResult) -> None:
+    rows = [
+        [
+            core.MONTHS[m.month - 1],
+            fmt(m.fii_result),
+            fmt(m.fii_loss_before),
+            fmt(m.fii_base),
+            fmt(m.fii_loss_after),
+            "20,00 %",
+            fmt(m.fii_base * Decimal("0.20")),
+            fmt(m.irrf_fii_before),
+            fmt(m.irrf_fii_month),
+            fmt(m.irrf_fii_after),
+            fmt(max(Decimal("0"), m.fii_base * Decimal("0.20") - m.irrf_fii_before - m.irrf_fii_month)),
+            "-",
+        ]
+        for m in result.monthly
+    ]
+    pdf_table(
+        story,
+        "Ganhos Liquidos ou Perdas",
+        [
+            "Mes",
+            "Resultado liquido no mes",
+            "Resultado negativo ate o mes anterior",
+            "Base de calculo do imposto",
+            "Prejuizo a compensar",
+            "Aliquota do imposto",
+            "Imposto devido",
+            "Saldo do imposto retido nos meses anteriores",
+            "Imposto retido no mes",
+            "Imposto a compensar",
+            "Imposto a pagar",
+            "Imposto pago",
+        ],
+        rows,
+    )
+
+
+def consolidated_files_for_year(year: int) -> list[Path]:
+    paths: list[Path] = []
+    for file in source_files("consolidado"):
+        path = Path(file)
+        if not path.exists():
+            continue
+        period = core.parse_consolidated_period(path)
+        if period and period[0] == year:
+            paths.append(path)
+    return sorted(paths, key=lambda path: (core.parse_consolidated_period(path) or (year, 99))[1])
+
+
+def pdf_consolidated_reports(story: list[Any], styles: Any, year: int) -> None:
+    from reportlab.platypus import PageBreak
+
+    for path in consolidated_files_for_year(year):
+        try:
+            sheets = core.read_consolidated_sheets(path)
+        except Exception as exc:
+            story.append(PageBreak())
+            pdf_header(story, styles, "Relatorio Consolidado B3", year)
+            pdf_table(story, path.name, ["Erro"], [[f"Falha ao ler arquivo: {exc}"]])
+            continue
+        for sheet in sheets:
+            story.append(PageBreak())
+            pdf_header(story, styles, "Relatorio Consolidado B3", year)
+            columns = [str(col) for col in (sheet.get("columns") or ["Sem dados"])]
+            rows = sheet.get("rows") or [[""]]
+            normalized_rows = [list(row[: len(columns)]) + [""] * max(0, len(columns) - len(row)) for row in rows]
+            pdf_table(story, f"{path.name} - {sheet.get('name') or 'Sheet'}", columns, normalized_rows)
+
+
+def pdf_table(story: list[Any], title: str, headers: list[str], rows: list[list[Any]], section_rows: set[int] | None = None) -> None:
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import cm
     from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
 
     styles = getSampleStyleSheet()
     story.append(Paragraph(title, styles["Heading2"]))
-    story.append(Spacer(1, 6))
-    table = Table([[str(cell) for cell in row] for row in rows], repeatRows=1)
-    table.setStyle(
-        TableStyle(
+    normal = styles["Normal"]
+    normal.fontSize = 7
+    normal.leading = 8
+    source_rows = rows if rows else [["-" for _ in headers]]
+    normalized_rows = [list(row[: len(headers)]) + [""] * max(0, len(headers) - len(row)) for row in source_rows]
+    data = [[Paragraph(str(cell), normal) for cell in headers]] + [[Paragraph(str(cell), normal) for cell in row] for row in normalized_rows]
+    table = Table(data, repeatRows=1)
+    style_commands = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eaeaea")),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#c9c9c9")),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 7),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]
+    for idx in section_rows or set():
+        row = idx + 1
+        style_commands.extend(
             [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e5e7eb")),
-                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#cbd5e1")),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("BACKGROUND", (0, row), (-1, row), colors.HexColor("#f1f1f1")),
+                ("FONTNAME", (0, row), (-1, row), "Helvetica-Bold"),
             ]
         )
-    )
+    table.setStyle(TableStyle(style_commands))
     story.append(table)
+    story.append(Spacer(1, 0.2 * cm))
 
 
 if __name__ == "__main__":

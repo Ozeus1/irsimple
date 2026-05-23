@@ -2,12 +2,12 @@
 {% block content %}
 <section class="panel narrow">
   <h1>Acessar IRSimple</h1>
+  <p class="muted">Escolha o usuario de trabalho. Cada usuario fica isolado no banco de dados.</p>
   <form method="post" class="grid-form">
     <label>Usuario
       <input name="username" value="{{ username }}" required>
     </label>
-    <button type="submit">Entrar</button>
+    <button type="submit" class="primary">Entrar</button>
   </form>
-  <p class="muted">Os dados ficam isolados por usuario no banco relacional SQLite.</p>
 </section>
 {% endblock %}

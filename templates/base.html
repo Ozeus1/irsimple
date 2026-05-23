@@ -9,22 +9,22 @@
 </head>
 <body>
   <header class="topbar">
-    <div>
-      <strong>IRSimple Web</strong>
-      <span class="muted">Usuario: {{ username }}</span>
+    <div class="brand-row">
+      <a class="brand" href="{{ url_for('dashboard') }}">IRSimple Web</a>
+      <span class="user-pill">Usuario: {{ username }}</span>
     </div>
     <nav>
-      <a href="{{ url_for('dashboard') }}">Inicio</a>
-      <a href="{{ url_for('calculo') }}">Calculo mensal</a>
-      <a href="{{ url_for('anual') }}">Declaracao anual</a>
-      <a href="{{ url_for('historico') }}">Historico</a>
-      <a href="{{ url_for('carteira') }}">Carteira</a>
-      <a href="{{ url_for('opcoes') }}">Opcoes</a>
-      <a href="{{ url_for('notas') }}">Notas</a>
-      <a href="{{ url_for('patrimonio') }}">Patrimonio</a>
-      <a href="{{ url_for('consolidado') }}">Relatorios B3</a>
-      <a href="{{ url_for('conferencia_b3') }}">Conferencia B3</a>
-      <a href="{{ url_for('manual') }}">Dados manuais</a>
+      <a class="{{ 'active' if request.endpoint == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}">Inicio</a>
+      <a class="{{ 'active' if request.endpoint in ['calculo', 'detalhe'] else '' }}" href="{{ url_for('calculo') }}">Calculo mensal</a>
+      <a class="{{ 'active' if request.endpoint == 'anual' else '' }}" href="{{ url_for('anual') }}">Declaracao anual</a>
+      <a class="{{ 'active' if request.endpoint == 'historico' else '' }}" href="{{ url_for('historico') }}">Historico</a>
+      <a class="{{ 'active' if request.endpoint == 'carteira' else '' }}" href="{{ url_for('carteira') }}">Carteira</a>
+      <a class="{{ 'active' if request.endpoint == 'opcoes' else '' }}" href="{{ url_for('opcoes') }}">Opcoes</a>
+      <a class="{{ 'active' if request.endpoint in ['notas', 'download_nota'] else '' }}" href="{{ url_for('notas') }}">Notas</a>
+      <a class="{{ 'active' if request.endpoint == 'patrimonio' else '' }}" href="{{ url_for('patrimonio') }}">Patrimonio</a>
+      <a class="{{ 'active' if request.endpoint == 'consolidado' else '' }}" href="{{ url_for('consolidado') }}">Relatorios B3</a>
+      <a class="{{ 'active' if request.endpoint == 'conferencia_b3' else '' }}" href="{{ url_for('conferencia_b3') }}">Conferencia B3</a>
+      <a class="{{ 'active' if request.endpoint in ['manual', 'delete_manual'] else '' }}" href="{{ url_for('manual') }}">Dados manuais</a>
     </nav>
   </header>
   <main class="page">

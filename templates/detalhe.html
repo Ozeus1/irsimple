@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Detalhe do calculo - {{ month_name }}/{{ year }} - {{ label }}</h1>
+<div class="toolbar">
+  <a class="button small" href="{{ url_for('calculo', year=year) }}">Voltar ao calculo mensal</a>
+</div>
+<section class="panel">
+  {% if rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Origem</th>
+        <th>Data</th>
+        <th>Tipo</th>
+        <th>Mercado</th>
+        <th>Ativo</th>
+        <th>Quantidade</th>
+        <th>Preco</th>
+        <th>Preco medio</th>
+        <th>Custo</th>
+        <th>Venda/valor</th>
+        <th>Lucro</th>
+        <th>Observacao</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.origem }}</td>
+        <td>{{ r.data }}</td>
+        <td>{{ r.tipo }}</td>
+        <td>{{ r.mercado }}</td>
+        <td>{{ r.ativo }}</td>
+        <td>{{ fmt_dec(r.quantidade) if r.quantidade != "" else "" }}</td>
+        <td>{{ fmt(r.preco) if r.preco != "" else "" }}</td>
+        <td>{{ fmt(r.preco_medio) if r.preco_medio != "" else "" }}</td>
+        <td>{{ fmt(r.custo) if r.custo != "" else "" }}</td>
+        <td>{{ fmt(r.venda) if r.venda != "" else "" }}</td>
+        <td>{{ fmt(r.lucro) if r.lucro != "" else "" }}</td>
+        <td>{{ r.observacao }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="totals">
+    Totais do detalhamento:
+    custo R$ {{ fmt(totals.custo) }} |
+    venda/valor R$ {{ fmt(totals.venda) }} |
+    lucro/prejuizo R$ {{ fmt(totals.lucro) }}
+  </div>
+  {% else %}
+  <p>Nao ha registros detalhados para esta combinacao de mes e coluna.</p>
+  {% endif %}
+</section>
+{% endblock %}
