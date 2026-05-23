@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Evolucao patrimonial</h1>
+<div class="toolbar"><a class="button small" href="{{ url_for('patrimonio', mode='anual') }}">Anual</a><a class="button small" href="{{ url_for('patrimonio', mode='mensal') }}">Mensal</a><a class="button small" href="{{ url_for('patrimonio', mode=mode, benchmarks=1) }}">Comparar indices</a></div>
+<section class="panel"><canvas id="wealthChart" height="280"></canvas></section>
+<section class="panel">
+  <table id="wealthData"><thead><tr><th>Periodo</th><th>Patrimonio</th><th>Ibovespa</th><th>Selic</th><th>Poupanca</th><th>Acoes/ETF</th><th>Fundos/FII</th><th>Outros</th><th>Total</th><th>Imposto</th></tr></thead>
+  <tbody>{% for r in rows %}<tr data-period="{{ r.periodo }}" data-patrimonio="{{ r.patrimonio }}"><td>{{ r.periodo }}</td><td>{{ fmt(r.patrimonio) }}</td><td>{{ fmt(r.ibovespa) if r.ibovespa is defined else '' }}</td><td>{{ fmt(r.selic) if r.selic is defined else '' }}</td><td>{{ fmt(r.poupanca) if r.poupanca is defined else '' }}</td><td>{{ fmt(r.acoes) }}</td><td>{{ fmt(r.fundos) }}</td><td>{{ fmt(r.outros) }}</td><td>{{ fmt(r.total) }}</td><td>{{ fmt(r.imposto) }}</td></tr>{% endfor %}</tbody></table>
+</section>
+{% endblock %}

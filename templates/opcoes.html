@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Opcoes a conferir</h1>
+<section class="panel">
+  <h2>Registrar conferencia</h2>
+  <form method="post" class="grid-form cols-4">
+    <label>Data <input name="data"></label><label>Tipo <input name="tipo" placeholder="opcao recomprada / em aberto / virou po"></label><label>Opcao <input name="ativo"></label><label>Quantidade <input name="quantidade"></label>
+    <label>Valor <input name="valor"></label><label class="wide">Observacao <input name="observacao"></label><button>Salvar</button>
+  </form>
+</section>
+<section class="panel">
+  <h2>Pendencias/suposicoes</h2>
+  <table><thead><tr><th>Ano</th><th>Opcao</th><th>Vencimento</th><th>Qtd</th><th>Premio</th><th>Situacao</th></tr></thead><tbody>{% for r in pending %}<tr><td>{{ r.year }}</td><td>{{ r.codigo }}</td><td>{{ r.vencimento }}</td><td>{{ fmt_dec(r.quantidade_aberta) }}</td><td>{{ fmt(r.premio_liquido) }}</td><td>{{ r.situacao }}</td></tr>{% endfor %}</tbody></table>
+</section>
+{% endblock %}

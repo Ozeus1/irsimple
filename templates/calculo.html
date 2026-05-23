@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Calculo mensal - {{ year }}</h1>
+<div class="toolbar">
+  {% for y in years %}<a class="button small" href="{{ url_for('calculo', year=y) }}">{{ y }}</a>{% endfor %}
+  <a class="button small" href="{{ url_for('export_excel', year=year) }}">Excel</a>
+  <a class="button small" href="{{ url_for('export_pdf', year=year) }}">PDF</a>
+</div>
+<section class="panel">
+  <table>
+    <thead><tr><th>Mes</th><th>Normal</th><th>Day trade</th><th>FII</th><th>Opcoes</th><th>Futuro</th><th>Base normal</th><th>Base DT</th><th>Base FII</th><th>IRRF comum</th><th>IRRF DT</th><th>IRRF FII</th><th>Imposto</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.mes }}</td><td>{{ fmt(r.normal) }}</td><td>{{ fmt(r.daytrade) }}</td><td>{{ fmt(r.fii) }}</td><td>{{ fmt(r.opcoes) }}</td><td>{{ fmt(r.futuro) }}</td>
+        <td>{{ fmt(r.base_normal) }}</td><td>{{ fmt(r.base_dt) }}</td><td>{{ fmt(r.base_fii) }}</td><td>{{ fmt(r.irrf_comum) }}</td><td>{{ fmt(r.irrf_dt) }}</td><td>{{ fmt(r.irrf_fii) }}</td><td>{{ fmt(r.imposto) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="panel">
+  <h2>Alertas</h2>
+  {% if warnings %}
+    <ol class="warnings">{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ol>
+  {% else %}
+    <p>Sem alertas criticos.</p>
+  {% endif %}
+</section>
+{% endblock %}

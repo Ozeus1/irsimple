@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Carteira mensal - {{ year }}</h1>
+<div class="toolbar">{% for y in years %}<a class="button small" href="{{ url_for('carteira', year=y) }}">{{ y }}</a>{% endfor %}</div>
+<section class="panel">
+  <table>
+    <thead><tr><th>Ano</th><th>Mes</th><th>Ativo</th><th>Categoria</th><th>Quantidade</th><th>Preco medio</th><th>Custo</th><th>Emprestado</th></tr></thead>
+    <tbody>{% for r in rows %}<tr><td>{{ r.year }}</td><td>{{ r.month }}</td><td>{{ r.code }}</td><td>{{ r.category }}</td><td>{{ fmt_dec(r.qty) }}</td><td>{{ fmt(r.avg) }}</td><td>{{ fmt(r.cost) }}</td><td>{{ fmt_dec(r.loan) }}</td></tr>{% endfor %}</tbody>
+  </table>
+</section>
+{% endblock %}

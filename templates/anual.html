@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Declaracao anual - exercicio {{ year + 1 }} / ano-base {{ year }}</h1>
+<div class="toolbar">{% for y in years %}<a class="button small" href="{{ url_for('anual', year=y) }}">{{ y }}</a>{% endfor %}</div>
+{% for title, key in [("Bens e Direitos","bens"),("Rendimentos Isentos","isentos"),("Rendimentos Sujeitos Exclusiva","sujeitos"),("Dividas e Onus","dividas")] %}
+<section class="panel">
+  <h2>{{ title }}</h2>
+  <table>
+    <tbody>
+      {% for row in rows[key] %}
+      <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+      {% else %}<tr><td>Sem registros.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endfor %}
+{% endblock %}

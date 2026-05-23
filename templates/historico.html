@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Historico</h1>
+<section class="panel">
+  <table>
+    <thead><tr><th>Ano</th><th>Exercicio</th><th>Ativos</th><th>Carteira</th><th>Normal</th><th>DT</th><th>FII</th><th>Opcoes</th><th>Futuro</th><th>Imposto</th></tr></thead>
+    <tbody>{% for r in rows %}<tr><td>{{ r.year }}</td><td>{{ r.exercise }}</td><td>{{ r.assets }}</td><td>{{ fmt(r.portfolio) }}</td><td>{{ fmt(r.normal) }}</td><td>{{ fmt(r.daytrade) }}</td><td>{{ fmt(r.fii) }}</td><td>{{ fmt(r.opcoes) }}</td><td>{{ fmt(r.futuro) }}</td><td>{{ fmt(r.imposto) }}</td></tr>{% endfor %}</tbody>
+  </table>
+</section>
+{% endblock %}

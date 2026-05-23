@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Notas de corretagem</h1>
+<section class="panel">
+  <form method="post" enctype="multipart/form-data" class="grid-form">
+    <label>PDFs <input type="file" name="notas" multiple accept=".pdf"></label>
+    <button>Importar notas</button>
+  </form>
+</section>
+<section class="panel">
+  <table><thead><tr><th>Data</th><th>Nota</th><th>IRRF comum</th><th>IRRF DT</th><th>IRRF FII</th><th>Base</th><th>Arquivo</th></tr></thead><tbody>{% for r in rows %}<tr><td>{{ r.trade_date }}</td><td>{{ r.note_number }}</td><td>{{ fmt(r.irrf_common) }}</td><td>{{ fmt(r.irrf_daytrade) }}</td><td>{{ fmt(r.irrf_fii) }}</td><td>{{ fmt(r.irrf_base) }}</td><td>{{ r.source_file }}</td></tr>{% endfor %}</tbody></table>
+</section>
+{% endblock %}

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Dados manuais</h1>
+<section class="panel">
+  <h2>Posicao inicial</h2>
+  <form method="post" class="grid-form cols-5"><input type="hidden" name="kind" value="position"><label>Ativo <input name="ativo"></label><label>Quantidade <input name="quantidade"></label><label>Custo <input name="custo"></label><label>Categoria <input name="categoria"></label><label>Corretora <input name="corretora"></label><button>Adicionar</button></form>
+  <table><tbody>{% for r in positions %}<tr><td>{{ r.ativo }}</td><td>{{ r.quantidade }}</td><td>{{ r.custo }}</td><td>{{ r.categoria }}</td><td>{{ r.corretora }}</td><td><form method="post" action="{{ url_for('delete_manual', table='positions', item_id=r.id) }}"><button class="link">Excluir</button></form></td></tr>{% endfor %}</tbody></table>
+</section>
+<section class="panel">
+  <h2>Eventos manuais</h2>
+  <form method="post" class="grid-form cols-4"><input type="hidden" name="kind" value="event"><label>Data <input name="data"></label><label>Tipo <input name="tipo"></label><label>Ativo <input name="ativo"></label><label>Quantidade <input name="quantidade"></label><label>Valor <input name="valor"></label><label>Categoria <input name="categoria"></label><label class="wide">Observacao <input name="observacao"></label><button>Adicionar</button></form>
+  <table><tbody>{% for r in events %}<tr><td>{{ r.data }}</td><td>{{ r.tipo }}</td><td>{{ r.ativo }}</td><td>{{ r.quantidade }}</td><td>{{ r.valor }}</td><td>{{ r.categoria }}</td><td>{{ r.observacao }}</td><td><form method="post" action="{{ url_for('delete_manual', table='events', item_id=r.id) }}"><button class="link">Excluir</button></form></td></tr>{% endfor %}</tbody></table>
+</section>
+{% endblock %}

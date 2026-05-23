@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title or "IRSimple Web" }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <strong>IRSimple Web</strong>
+      <span class="muted">Usuario: {{ username }}</span>
+    </div>
+    <nav>
+      <a href="{{ url_for('dashboard') }}">Inicio</a>
+      <a href="{{ url_for('calculo') }}">Calculo mensal</a>
+      <a href="{{ url_for('anual') }}">Declaracao anual</a>
+      <a href="{{ url_for('historico') }}">Historico</a>
+      <a href="{{ url_for('carteira') }}">Carteira</a>
+      <a href="{{ url_for('opcoes') }}">Opcoes</a>
+      <a href="{{ url_for('notas') }}">Notas</a>
+      <a href="{{ url_for('patrimonio') }}">Patrimonio</a>
+      <a href="{{ url_for('consolidado') }}">Relatorios B3</a>
+      <a href="{{ url_for('conferencia_b3') }}">Conferencia B3</a>
+      <a href="{{ url_for('manual') }}">Dados manuais</a>
+    </nav>
+  </header>
+  <main class="page">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="messages">
+          {% for category, message in messages %}
+            <div class="message {{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

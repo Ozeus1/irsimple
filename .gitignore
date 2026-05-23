@@ -13,6 +13,7 @@ env/
 *.log
 irsimple_config.json
 conferencias_opcoes*.json
+web_uploads/
 *.xlsx
 *.xls
 *.pdf

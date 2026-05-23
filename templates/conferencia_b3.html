@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Conferencia B3</h1>
+<section class="panel"><table><thead><tr><th>Ano</th><th>Mes</th><th>Ativo</th><th>B3</th><th>Calculado</th><th>Diferenca</th><th>Arquivo</th></tr></thead><tbody>{% for r in rows %}<tr class="{{ 'diff' if r.diff else '' }}"><td>{{ r.year }}</td><td>{{ r.month }}</td><td>{{ r.code }}</td><td>{{ fmt_dec(r.b3) }}</td><td>{{ fmt_dec(r.calc) }}</td><td>{{ fmt_dec(r.diff) }}</td><td>{{ r.file }}</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

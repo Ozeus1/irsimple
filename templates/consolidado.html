@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Relatorios consolidados B3</h1>
+<section class="panel"><form method="post" enctype="multipart/form-data" class="grid-form"><label>Excel B3 <input type="file" name="relatorios" multiple accept=".xlsx,.xls"></label><button>Importar</button></form></section>
+<section class="panel"><h2>Arquivos</h2>{% for f in files %}<a class="button small" href="{{ url_for('consolidado', file=f) }}">{{ f }}</a>{% endfor %}</section>
+{% for sheet in sheets %}
+<section class="panel"><h2>{{ sheet.name }}</h2><table><thead><tr>{% for c in sheet.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead><tbody>{% for row in sheet.rows[:200] %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></section>
+{% endfor %}
+{% endblock %}

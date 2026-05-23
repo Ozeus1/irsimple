@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Painel</h1>
+<section class="cards">
+  <div class="card"><span>Negocios</span><strong>{{ trade_count }}</strong></div>
+  <div class="card"><span>Movimentacoes</span><strong>{{ movement_count }}</strong></div>
+  <div class="card"><span>Notas</span><strong>{{ note_count }}</strong></div>
+</section>
+<section class="panel">
+  <h2>Configuracao de calculo</h2>
+  <form method="post" action="{{ url_for('update_config') }}" class="grid-form cols-4">
+    <label>Nome <input name="name" value="{{ cfg.get('name','') }}"></label>
+    <label>Ano inicial <input name="start_year" value="{{ cfg.get('start_year','2020') }}"></label>
+    <label>Ano final <input name="end_year" value="{{ cfg.get('end_year','2026') }}"></label>
+    <label>Visualizar <input name="selected_year" value="{{ cfg.get('selected_year', cfg.get('end_year','2026')) }}"></label>
+    <label>Data-base prejuizo <input name="loss_start_date" value="{{ cfg.get('loss_start_date','31/12/2024') }}"></label>
+    <label>Prejuizo normal <input name="loss_normal" value="{{ cfg.get('loss_normal','0,00') }}"></label>
+    <label>Prejuizo day trade <input name="loss_daytrade" value="{{ cfg.get('loss_daytrade','0,00') }}"></label>
+    <label>Prejuizo FII <input name="loss_fii" value="{{ cfg.get('loss_fii','0,00') }}"></label>
+    <button type="submit">Salvar configuracao</button>
+  </form>
+</section>
+<section class="panel">
+  <h2>Importar planilhas B3</h2>
+  <form method="post" action="{{ url_for('importar') }}" enctype="multipart/form-data" class="grid-form cols-2">
+    <label>Negociacao B3 <input type="file" name="negociacao" accept=".xlsx,.xls"></label>
+    <label>Movimentacao B3 <input type="file" name="movimentacao" accept=".xlsx,.xls"></label>
+    <button type="submit">Importar/Substituir</button>
+  </form>
+  <p class="muted">Atual: {{ neg_file or "sem arquivo" }} | {{ mov_file or "sem arquivo" }}</p>
+</section>
+<section class="panel">
+  <h2>Exportacoes</h2>
+  <a class="button" href="{{ url_for('export_excel') }}">Exportar Excel</a>
+  <a class="button" href="{{ url_for('export_pdf') }}">Exportar PDF</a>
+</section>
+{% endblock %}
