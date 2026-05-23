@@ -28,6 +28,7 @@ from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.request import Request, urlopen
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -36,6 +37,11 @@ try:
     import pandas as pd
 except Exception:  # pragma: no cover - dependencia local
     pd = None
+
+try:
+    import requests
+except Exception:  # pragma: no cover - dependencia local
+    requests = None
 
 try:
     from openpyxl import Workbook
@@ -61,6 +67,10 @@ OPTION_EVENTS_FILE = BASE_DIR / "conferencias_opcoes.json"
 CONFIG_FILE = BASE_DIR / "irsimple_config.json"
 DB_FILE = BASE_DIR / "irsimple.db"
 DEFAULT_USER = os.environ.get("IRSIMPLE_USER", "local").strip() or "local"
+CNPJ_STOCKS_URL = "https://www.idinheiro.com.br/investimentos/cnpj-empresas-listadas-b3/"
+CNPJ_FIIS_URL = "https://www.empiricus.com.br/explica/cnpj-fundos-imobiliarios-fiis-listados-b3-declaracao-imposto-de-renda/"
+CNPJ_ETFS_URL = "https://maisretorno.com/lista-etf"
+CNPJ_RE = re.compile(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}")
 MONTHS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 MONTH_NAME_TO_NUMBER = {
     "janeiro": 1,
@@ -98,6 +108,67 @@ def latest_matching_file(patterns: list[str], fallback: Path) -> Path:
     if not candidates:
         return fallback
     return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def fetch_url_text(url: str) -> str:
+    if requests is not None:
+        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0 IRSimple/1.0"}, timeout=40)
+        response.raise_for_status()
+        return response.text
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0 IRSimple/1.0"})
+    with urlopen(req, timeout=40) as response:
+        return response.read().decode("utf-8", errors="ignore")
+
+
+def parse_asset_cnpj_sources() -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    if pd is None:
+        raise RuntimeError("A biblioteca pandas nao esta instalada.")
+
+    stocks_html = fetch_url_text(CNPJ_STOCKS_URL)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        stock_tables = pd.read_html(stocks_html)
+    for table in stock_tables:
+        columns = [normalize_header(col) for col in table.columns]
+        table.columns = columns
+        if "codigo_s" not in columns or "cnpj" not in columns:
+            continue
+        name_col = "empresa" if "empresa" in columns else columns[0]
+        for _, row in table.iterrows():
+            cnpj = str(row.get("cnpj") or "").strip()
+            if not CNPJ_RE.fullmatch(cnpj):
+                continue
+            for ticker in re.findall(r"[A-Z]{4}\d{1,2}", str(row.get("codigo_s") or "").upper()):
+                rows.append({"ticker": normalize_ticker(ticker), "cnpj": cnpj, "nome": str(row.get(name_col) or ""), "tipo": "acao", "fonte": CNPJ_STOCKS_URL})
+
+    fii_html = fetch_url_text(CNPJ_FIIS_URL)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        fii_tables = pd.read_html(fii_html)
+    for table in fii_tables:
+        if table.shape[1] < 3:
+            continue
+        for _, row in table.iloc[1:].iterrows():
+            name = str(row.iloc[0] or "")
+            ticker = normalize_ticker(row.iloc[1])
+            cnpj = str(row.iloc[2] or "").strip()
+            if ticker and CNPJ_RE.fullmatch(cnpj):
+                rows.append({"ticker": ticker, "cnpj": cnpj, "nome": name, "tipo": "fii", "fonte": CNPJ_FIIS_URL})
+
+    etf_html = fetch_url_text(CNPJ_ETFS_URL)
+    etf_pattern = re.compile(
+        r'>([A-Z0-9]{4,12})</p></a><p[^>]*>(.*?)</p>.*?<p[^>]*>CNPJ</p><p[^>]*>(\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})</p>',
+        re.S,
+    )
+    for ticker, name, cnpj in etf_pattern.findall(etf_html):
+        rows.append({"ticker": normalize_ticker(ticker), "cnpj": cnpj, "nome": re.sub(r"<[^>]+>", "", name).strip(), "tipo": "etf", "fonte": CNPJ_ETFS_URL})
+
+    dedup: dict[str, dict[str, str]] = {}
+    for row in rows:
+        if row["ticker"]:
+            dedup[row["ticker"]] = row
+    return sorted(dedup.values(), key=lambda item: item["ticker"])
 
 
 def parse_consolidated_period(path: Path) -> tuple[int, int] | None:
@@ -304,6 +375,18 @@ def init_db() -> None:
                 categoria TEXT,
                 observacao TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS asset_cnpjs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                ticker TEXT NOT NULL,
+                cnpj TEXT NOT NULL,
+                nome TEXT,
+                tipo TEXT,
+                fonte TEXT,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, ticker),
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
             """
@@ -571,8 +654,9 @@ class CalculationResult:
 
 
 class IRSimpleEngine:
-    def __init__(self, year: int) -> None:
+    def __init__(self, year: int, asset_cnpjs: dict[str, str] | None = None) -> None:
         self.year = year
+        self.asset_cnpjs = asset_cnpjs or {}
 
     def calculate(
         self,
@@ -581,6 +665,8 @@ class IRSimpleEngine:
         initial_positions: list[Position],
         initial_losses: dict[str, Decimal],
         events: list[dict[str, Any]],
+        dated_losses: dict[str, Decimal] | None = None,
+        dated_loss_start: date | None = None,
     ) -> CalculationResult:
         positions: dict[str, Position] = {}
         warnings: list[str] = []
@@ -613,7 +699,7 @@ class IRSimpleEngine:
         pending_options.extend(self._process_option_exercises(trades_for_options, positions, monthly_positions, monthly, warnings, cutoff, events))
         self._apply_income_movements(movements, monthly)
 
-        self._apply_monthly_tax(monthly, initial_losses)
+        self._apply_monthly_tax(monthly, initial_losses, dated_losses or {}, dated_loss_start)
         exempt_income, taxable_income, debts = self._annual_tables(movements, positions)
         monthly_loans = self._monthly_loans(movements)
         return CalculationResult(self.year, monthly, positions, exempt_income, taxable_income, debts, warnings, monthly_positions, monthly_loans, pending_options)
@@ -832,11 +918,21 @@ class IRSimpleEngine:
             if "rendimento" in kind and mov.category == "fii":
                 pass
 
-    def _apply_monthly_tax(self, monthly: list[MonthlyTax], initial_losses: dict[str, Decimal]) -> None:
+    def _apply_monthly_tax(
+        self,
+        monthly: list[MonthlyTax],
+        initial_losses: dict[str, Decimal],
+        dated_losses: dict[str, Decimal],
+        dated_loss_start: date | None,
+    ) -> None:
         normal_loss = abs(money(initial_losses.get("normal"))) + abs(money(initial_losses.get("opcoes"))) + abs(money(initial_losses.get("futuro")))
         day_loss = abs(money(initial_losses.get("daytrade")))
         fii_loss = abs(money(initial_losses.get("fii")))
         for item in monthly:
+            if dated_loss_start and dated_loss_start.year == self.year and item.month == dated_loss_start.month:
+                normal_loss = q2(normal_loss + abs(money(dated_losses.get("normal"))) + abs(money(dated_losses.get("opcoes"))) + abs(money(dated_losses.get("futuro"))))
+                day_loss = q2(day_loss + abs(money(dated_losses.get("daytrade"))))
+                fii_loss = q2(fii_loss + abs(money(dated_losses.get("fii"))))
             item.normal_loss_before = q2(normal_loss)
             item.daytrade_loss_before = q2(day_loss)
             item.fii_loss_before = q2(fii_loss)
@@ -1277,13 +1373,13 @@ class IRSimpleEngine:
                 continue
             kind = normalize_header(mov.kind)
             if "rendimento" in kind and mov.category == "fii":
-                exempt[("26 - Outros", f"Rendimentos de FII/Fiagro - {mov.code}")] += mov.value
+                exempt[("26 - Outros", self._income_description("Rendimentos de FII/Fiagro", mov.code))] += mov.value
             elif "dividendo" in kind:
-                exempt[("09 - Lucros e dividendos recebidos", f"Dividendos - {mov.code}")] += mov.value
+                exempt[("09 - Lucros e dividendos recebidos", self._income_description("Dividendos", mov.code))] += mov.value
             elif "juros_sobre_capital" in kind or "jcp" in kind:
-                taxable[("10 - Juros sobre capital proprio", f"JCP - {mov.code}")] += mov.value
+                taxable[("10 - Juros sobre capital proprio", self._income_description("JCP", mov.code))] += mov.value
             elif "emprestimo" in kind and mov.value > 0:
-                taxable[("06 - Rendimentos de aplicacoes financeiras", f"Rendimento de emprestimo de ativos - {mov.code}")] += mov.value
+                taxable[("06 - Rendimentos de aplicacoes financeiras", self._income_description("Rendimento de emprestimo de ativos", mov.code))] += mov.value
             if "emprestimo" in kind and mov.qty > 0:
                 debts[mov.code] += mov.value if mov.value > 0 else Decimal("0")
 
@@ -1301,6 +1397,11 @@ class IRSimpleEngine:
             if value > 0
         ]
         return exempt_rows, taxable_rows, debt_rows
+
+    def _income_description(self, label: str, code: str) -> str:
+        code = normalize_ticker(code)
+        cnpj = self.asset_cnpjs.get(code)
+        return f"{label} - {code} - CNPJ {cnpj}" if cnpj else f"{label} - {code}"
 
 
 def read_b3_negotiation(path: Path) -> list[Trade]:
@@ -1482,7 +1583,11 @@ class IRSimpleApp:
         default_mov = self.config.get("movimentacao_file") or str(latest_matching_file(["movimentacao-*.xlsx"], BASE_DIR / "movimentacao-2026-05-17-16-43-42.xlsx"))
         self.neg_file_var = tk.StringVar(value=default_neg)
         self.mov_file_var = tk.StringVar(value=default_mov)
-        self.loss_vars = {key: tk.StringVar(value="0,00") for key in ["normal", "daytrade", "fii", "opcoes", "futuro"]}
+        self.loss_vars = {
+            key: tk.StringVar(value=str(self.config.get(f"loss_{key}") or "0,00"))
+            for key in ["normal", "daytrade", "fii", "opcoes", "futuro"]
+        }
+        self.loss_start_date_var = tk.StringVar(value=str(self.config.get("loss_start_date") or f"31/12/{int(self.start_year_var.get()) - 1}"))
         self.status_var = tk.StringVar(value="Importe as planilhas da B3 ou informe os dados manualmente.")
         self._build_ui()
         self._bind_persistent_header_fields()
@@ -1539,13 +1644,16 @@ class IRSimpleApp:
         ttk.Entry(tab, textvariable=self.mov_file_var).grid(row=1, column=1, sticky="ew", padx=8)
         ttk.Button(tab, text="Selecionar", command=lambda: self.pick_file(self.mov_file_var)).grid(row=1, column=2)
         ttk.Button(tab, text="Importar planilhas", command=lambda: self.import_files(show_message=True)).grid(row=2, column=0, sticky="w", pady=(12, 4))
+        ttk.Button(tab, text="Atualizar CNPJs online", command=self.update_asset_cnpjs_online).grid(row=2, column=1, sticky="w", pady=(12, 4), padx=8)
 
         losses = ttk.LabelFrame(tab, text="Prejuizos a compensar na data inicial", padding=10)
         losses.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(14, 0))
+        ttk.Label(losses, text="Data-base do saldo").grid(row=0, column=0, sticky="w", padx=(0, 4))
+        ttk.Entry(losses, textvariable=self.loss_start_date_var, width=12).grid(row=0, column=1, sticky="w", padx=(0, 16))
         labels = [("normal", "Operacoes normais"), ("daytrade", "Day trade"), ("fii", "FII/FIAGRO"), ("opcoes", "Opcoes"), ("futuro", "Mercado futuro")]
         for idx, (key, label) in enumerate(labels):
-            ttk.Label(losses, text=label).grid(row=0, column=idx * 2, sticky="w", padx=(0, 4))
-            ttk.Entry(losses, textvariable=self.loss_vars[key], width=14).grid(row=0, column=idx * 2 + 1, sticky="w", padx=(0, 12))
+            ttk.Label(losses, text=label).grid(row=1, column=idx * 2, sticky="w", padx=(0, 4), pady=(8, 0))
+            ttk.Entry(losses, textvariable=self.loss_vars[key], width=14).grid(row=1, column=idx * 2 + 1, sticky="w", padx=(0, 12), pady=(8, 0))
 
         note = (
             "Regras usadas: lucro em acoes comuns com vendas mensais ate R$ 20.000,00 fica como rendimento isento; "
@@ -2065,6 +2173,9 @@ class IRSimpleApp:
         self.config["start_year"] = str(self.start_year_var.get())
         self.config["end_year"] = str(self.end_year_var.get())
         self.config["selected_year"] = self.selected_year_var.get()
+        self.config["loss_start_date"] = self.loss_start_date_var.get()
+        for key, var in self.loss_vars.items():
+            self.config[f"loss_{key}"] = var.get()
         self.config["negociacao_file"] = self.neg_file_var.get()
         self.config["movimentacao_file"] = self.mov_file_var.get()
         self.config["consolidated_files"] = self.consolidated_files
@@ -2098,7 +2209,7 @@ class IRSimpleApp:
             debug_log(f"Falha ao salvar configuracao no banco: {exc}")
 
     def _bind_persistent_header_fields(self) -> None:
-        for var in [self.name_var, self.selected_year_var, self.start_year_var, self.end_year_var]:
+        for var in [self.name_var, self.selected_year_var, self.start_year_var, self.end_year_var, self.loss_start_date_var, *self.loss_vars.values()]:
             var.trace_add("write", lambda *_args: self._save_config())
 
     def _save_imported_data_to_db(self, neg_file: Path, mov_file: Path) -> None:
@@ -2214,6 +2325,44 @@ class IRSimpleApp:
             self.status_var.set(f"Dados carregados do banco: {len(self.trades)} negocios e {len(self.movements)} movimentacoes.")
         except Exception as exc:
             debug_log(f"Falha ao carregar planilhas do banco: {exc}")
+
+    def update_asset_cnpjs_online(self, show_message: bool = True) -> int:
+        self.status_var.set("Atualizando tabela de CNPJs pela internet...")
+        self.root.configure(cursor="watch")
+        self.root.update_idletasks()
+        try:
+            rows = parse_asset_cnpj_sources()
+            with db_connect() as conn:
+                conn.execute("DELETE FROM asset_cnpjs WHERE user_id = ?", (self.user_id,))
+                conn.executemany(
+                    """
+                    INSERT INTO asset_cnpjs (user_id, ticker, cnpj, nome, tipo, fonte, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    [(self.user_id, row["ticker"], row["cnpj"], row["nome"], row["tipo"], row["fonte"]) for row in rows],
+                )
+            msg = f"Tabela de CNPJs atualizada: {len(rows)} ativos."
+            self.status_var.set(msg)
+            if show_message:
+                messagebox.showinfo(APP_TITLE, msg)
+            return len(rows)
+        except Exception as exc:
+            self.status_var.set("Falha ao atualizar CNPJs.")
+            debug_log(f"Falha ao atualizar CNPJs: {exc}")
+            if show_message:
+                messagebox.showerror(APP_TITLE, f"Falha ao atualizar CNPJs:\n{exc}")
+            return 0
+        finally:
+            self.root.configure(cursor="")
+
+    def _asset_cnpj_map(self) -> dict[str, str]:
+        try:
+            with db_connect() as conn:
+                rows = conn.execute("SELECT ticker, cnpj FROM asset_cnpjs WHERE user_id = ?", (self.user_id,)).fetchall()
+            return {normalize_ticker(row["ticker"]): row["cnpj"] for row in rows}
+        except Exception as exc:
+            debug_log(f"Falha ao carregar CNPJs do banco: {exc}")
+            return {}
 
     def import_files(self, show_message: bool = False) -> bool:
         debug_log("Inicio da importacao")
@@ -2343,6 +2492,7 @@ class IRSimpleApp:
             "positions": self.position_table.rows(),
             "events": self.event_table.rows(),
             "losses": {key: var.get() for key, var in self.loss_vars.items()},
+            "loss_start_date": self.loss_start_date_var.get(),
         }
         return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
@@ -2639,13 +2789,35 @@ class IRSimpleApp:
             debug_log(f"Inicio do calculo: {start_year}-{end_year}; negocios={len(self.trades)}; movimentacoes={len(self.movements)}")
             results: dict[int, CalculationResult] = {}
             current_positions = positions
-            current_losses = losses
+            current_losses = {key: Decimal("0") for key in ["normal", "daytrade", "fii", "opcoes", "futuro"]}
+            loss_start_date = self._loss_effect_date(parse_date(self.loss_start_date_var.get()))
+            manual_losses_applied = False
+            asset_cnpjs = self._asset_cnpj_map()
             for year in range(start_year, end_year + 1):
                 self.status_var.set(f"Calculando ano-calendario {year}...")
                 self.root.update_idletasks()
                 debug_log(f"Calculando ano {year}")
-                engine = IRSimpleEngine(year)
-                result = engine.calculate(self.trades, self.movements, current_positions, current_losses, self._events_for_year(events, year, start_year))
+                initial_losses = dict(current_losses)
+                dated_losses: dict[str, Decimal] = {}
+                dated_loss_start: date | None = None
+                if not manual_losses_applied:
+                    if loss_start_date is None or loss_start_date < date(year, 1, 1):
+                        initial_losses = self._combine_loss_dicts(initial_losses, losses)
+                        manual_losses_applied = True
+                    elif loss_start_date.year == year:
+                        dated_losses = losses
+                        dated_loss_start = loss_start_date
+                        manual_losses_applied = True
+                engine = IRSimpleEngine(year, asset_cnpjs)
+                result = engine.calculate(
+                    self.trades,
+                    self.movements,
+                    current_positions,
+                    initial_losses,
+                    self._events_for_year(events, year, start_year),
+                    dated_losses,
+                    dated_loss_start,
+                )
                 debug_log(f"Ano {year} calculado: posicoes={len(result.positions)}; alertas={len(result.warnings)}")
                 results[year] = result
                 current_positions = self._carry_positions(result)
@@ -2654,6 +2826,19 @@ class IRSimpleApp:
         except Exception as exc:
             debug_log(f"Falha no calculo: {exc}")
             self._fail_calculation(exc)
+
+    def _combine_loss_dicts(self, base: dict[str, Decimal], extra: dict[str, Decimal]) -> dict[str, Decimal]:
+        keys = {"normal", "daytrade", "fii", "opcoes", "futuro"}
+        return {key: q2(money(base.get(key)) + money(extra.get(key))) for key in keys}
+
+    def _loss_effect_date(self, base_date: date | None) -> date | None:
+        if base_date is None:
+            return None
+        if base_date.day == 1:
+            return base_date
+        year = base_date.year + 1 if base_date.month == 12 else base_date.year
+        month = 1 if base_date.month == 12 else base_date.month + 1
+        return date(year, month, 1)
 
     def _set_calculating(self, calculating: bool) -> None:
         self.calculating = calculating
@@ -3543,21 +3728,42 @@ class IRSimpleApp:
 
     def _annual_rows(self, result: CalculationResult) -> dict[str, list[list[Any]]]:
         bens = []
+        asset_cnpjs = self._asset_cnpj_map()
         for code, pos in sorted(result.positions.items()):
             if pos.qty <= 0 or pos.category in {"opcoes", "futuro"}:
                 continue
             group = annual_asset_group(pos)
             discr = f"{code} - Quantidade: {fmt_decimal(pos.qty)} - Preco medio: R$ {fmt_money(pos.avg_price)}"
-            bens.append([group, discr, fmt_decimal(pos.previous_qty), fmt_money(pos.previous_cost), fmt_decimal(pos.qty), fmt_money(pos.cost)])
+            bens.append([group, asset_cnpjs.get(normalize_ticker(code), ""), discr, fmt_decimal(pos.previous_qty), fmt_money(pos.previous_cost), fmt_decimal(pos.qty), fmt_money(pos.cost)])
         return {
             "bens": bens,
-            "isentos": [[row["codigo"], row["descricao"], fmt_money(row["valor"])] for row in result.exempt_income],
-            "sujeitos": [[row["codigo"], row["descricao"], fmt_money(row["valor"])] for row in result.taxable_income],
+            "isentos": [[row["codigo"], *self._split_description_cnpj(row["descricao"]), fmt_money(row["valor"])] for row in result.exempt_income],
+            "sujeitos": [[row["codigo"], *self._split_description_cnpj(row["descricao"]), fmt_money(row["valor"])] for row in result.taxable_income],
             "dividas": [
-                [row["codigo"], row["descricao"], fmt_money(row["situacao_anterior"]), fmt_money(row["situacao_atual"]), fmt_money(row["valor_pago"])]
+                [row["codigo"], self._cnpj_from_description(row["descricao"], asset_cnpjs), row["descricao"], fmt_money(row["situacao_anterior"]), fmt_money(row["situacao_atual"]), fmt_money(row["valor_pago"])]
                 for row in result.debts
             ],
         }
+
+    def _split_description_cnpj(self, description: str) -> list[str]:
+        text = str(description or "")
+        match = CNPJ_RE.search(text)
+        if not match:
+            return ["", text]
+        cnpj = match.group(0)
+        clean = re.sub(r"\s*-\s*CNPJ\s*" + re.escape(cnpj), "", text, flags=re.I).strip()
+        clean = re.sub(r"\s*CNPJ\s*" + re.escape(cnpj), "", clean, flags=re.I).strip(" -")
+        return [cnpj, clean]
+
+    def _cnpj_from_description(self, description: str, asset_cnpjs: dict[str, str]) -> str:
+        match = CNPJ_RE.search(str(description or ""))
+        if match:
+            return match.group(0)
+        for ticker in re.findall(r"\b[A-Z]{4}\d{1,2}\b", str(description or "").upper()):
+            cnpj = asset_cnpjs.get(normalize_ticker(ticker))
+            if cnpj:
+                return cnpj
+        return ""
 
     def export_excel(self) -> None:
         if self.calculating:
@@ -3589,11 +3795,12 @@ class IRSimpleApp:
             self._write_sheet(ws, ["Mes", "Resultado normal", "Day trade", "FII", "Opcoes", "Futuro", "Base normal", "Base DT", "Base FII", "Imposto"], self._monthly_rows(result))
 
             annual = self._annual_rows(result)
+            previous_year = year - 1
             sheet_defs = [
-                (f"{year} bens", ["codigo", "discriminacao", "qtd 31/12 anterior", "valor 31/12 anterior", "qtd 31/12 atual", "valor 31/12 atual"], annual["bens"]),
-                (f"{year} isentos", ["codigo", "descricao", "valor"], annual["isentos"]),
-                (f"{year} exclusiva", ["codigo", "descricao", "valor"], annual["sujeitos"]),
-                (f"{year} dividas", ["codigo", "descricao", "31/12 anterior", "31/12 atual", "valor pago"], annual["dividas"]),
+                (f"{year} bens", ["codigo", "cnpj", "discriminacao", f"qtd em 31/12/{previous_year}", f"valor em 31/12/{previous_year}", f"qtd em 31/12/{year}", f"valor em 31/12/{year}"], annual["bens"]),
+                (f"{year} isentos", ["codigo", "cnpj", "descricao", "valor"], annual["isentos"]),
+                (f"{year} exclusiva", ["codigo", "cnpj", "descricao", "valor"], annual["sujeitos"]),
+                (f"{year} dividas", ["codigo", "cnpj", "descricao", f"31/12/{previous_year}", f"31/12/{year}", f"valor pago em {year}"], annual["dividas"]),
             ]
             for title, headers, rows in sheet_defs:
                 ws = wb.create_sheet(title[:31])
@@ -3664,12 +3871,19 @@ class IRSimpleApp:
         if not self.results_by_year or SimpleDocTemplate is None:
             messagebox.showerror(APP_TITLE, "Nao foi possivel exportar PDF. Instale reportlab.")
             return
-        start_year = min(self.results_by_year)
-        end_year = max(self.results_by_year)
+        try:
+            year = int(self.selected_year_var.get())
+        except Exception:
+            messagebox.showerror(APP_TITLE, "Selecione um ano-calendario valido para gerar o PDF.")
+            return
+        result = self.results_by_year.get(year)
+        if result is None:
+            messagebox.showerror(APP_TITLE, f"O ano-calendario {year} ainda nao foi calculado.")
+            return
         path = filedialog.asksaveasfilename(
             defaultextension=".pdf",
             filetypes=[("PDF", "*.pdf")],
-            initialfile=f"IRSimple_{start_year}_{end_year}.pdf",
+            initialfile=f"IRSimple_exercicio_{year + 1}_ano_base_{year}.pdf",
             initialdir=str(BASE_DIR),
         )
         if not path:
@@ -3677,34 +3891,175 @@ class IRSimpleApp:
         styles = getSampleStyleSheet()
         doc = SimpleDocTemplate(path, pagesize=landscape(A4), leftMargin=1 * cm, rightMargin=1 * cm, topMargin=1 * cm, bottomMargin=1 * cm)
         story: list[Any] = []
-        first_year = True
-        for year, result in self.results_by_year.items():
-            if not first_year:
+        self._pdf_header(story, styles, "Impostos em Renda Variavel", year)
+        for idx, month in enumerate(result.monthly):
+            if idx:
                 story.append(PageBreak())
-            first_year = False
-            self._pdf_header(story, styles, "Impostos em Renda Variavel", year)
-            self._pdf_table(story, "Ganhos Liquidos ou Perdas", ["Mes", "Normal", "Day Trade", "FII", "Opcoes", "Futuro", "Imposto"], [
-                [MONTHS[m.month - 1], fmt_money(m.normal_result), fmt_money(m.daytrade_result), fmt_money(m.fii_result), fmt_money(m.options_result), fmt_money(m.future_result), fmt_money(m.tax_due)]
-                for m in result.monthly
-            ])
+                self._pdf_header(story, styles, "Impostos em Renda Variavel", year)
+            self._pdf_variable_month(story, month)
+
+        story.append(PageBreak())
+        self._pdf_header(story, styles, "Fundos Imobiliarios", year)
+        self._pdf_fii_monthly(story, result)
+
+        annual = self._annual_rows(result)
+        previous_year = year - 1
+        for key, title, headers in [
+            ("bens", "Bens e Direitos", ["Codigo", "CNPJ", "Discriminacao", f"Qtd em 31/12/{previous_year}", f"Situacao em 31/12/{previous_year}", f"Qtd em 31/12/{year}", f"Situacao em 31/12/{year}"]),
+            ("isentos", "Rendimentos Isentos e Nao Tributaveis", ["Codigo", "CNPJ", "Descricao", "Valor"]),
+            ("sujeitos", "Rendimentos Sujeitos a Tributacao Exclusiva", ["Codigo", "CNPJ", "Descricao", "Valor"]),
+            ("dividas", "Onus e Dividas", ["Codigo", "CNPJ", "Discriminacao", f"Situacao em 31/12/{previous_year}", f"Situacao em 31/12/{year}", f"Valor pago em {year}"]),
+        ]:
             story.append(PageBreak())
-            self._pdf_header(story, styles, "Fundos Imobiliarios", year)
-            self._pdf_table(story, "Ganhos Liquidos ou Perdas", ["Mes", "Resultado liquido", "Prejuizo anterior", "Base", "Prejuizo a compensar", "Aliquota", "Imposto"], [
-                [MONTHS[m.month - 1], fmt_money(m.fii_result), fmt_money(m.fii_loss_before), fmt_money(m.fii_base), fmt_money(m.fii_loss_after), "20,00 %", fmt_money(m.fii_base * Decimal("0.20"))]
-                for m in result.monthly
-            ])
-            annual = self._annual_rows(result)
-            for key, title, headers in [
-                ("bens", "Bens e Direitos", ["codigo", "discriminacao", "qtd 31/12 anterior", "valor 31/12 anterior", "qtd 31/12 atual", "valor 31/12 atual"]),
-                ("isentos", "Rendimentos Isentos", ["codigo", "descricao", "valor"]),
-                ("sujeitos", "Rendimentos Sujeitos a Tributacao Exclusiva", ["codigo", "descricao", "valor"]),
-                ("dividas", "Onus e Dividas", ["codigo", "descricao", "31/12 anterior", "31/12 atual", "valor pago"]),
-            ]:
-                story.append(PageBreak())
-                self._pdf_header(story, styles, title, year)
-                self._pdf_table(story, title, headers, annual[key])
+            self._pdf_header(story, styles, title, year)
+            self._pdf_table(story, title, headers, annual[key])
+        self._pdf_consolidated_reports(story, styles, year)
         doc.build(story)
-        self.status_var.set(f"PDF gerado: {path}")
+        self.status_var.set(f"PDF do exercicio {year + 1} gerado: {path}")
+
+    def _pdf_monthly_income_rows(self, result: CalculationResult) -> list[list[Any]]:
+        rows: list[list[Any]] = []
+        for m in result.monthly:
+            month = MONTHS[m.month - 1]
+            future_dt = q2(m.future_dollar_daytrade + m.future_index_daytrade)
+            future_common = q2(m.future_result - future_dt)
+            common_result = q2((m.normal_result if m.exempt_stock_gain == 0 else Decimal("0")) + m.options_result + future_common)
+            daytrade_result = q2(m.daytrade_result + future_dt)
+            common_tax = q2(m.normal_base * Decimal("0.15"))
+            daytrade_tax = q2(m.daytrade_base * Decimal("0.20"))
+            rows.extend(
+                [
+                    [month, "Mercado a Vista", "Mercado a vista - acoes", fmt_money(m.normal_result), fmt_money(m.daytrade_result)],
+                    [month, "Mercado de Opcoes", "Mercado opcoes - acoes", fmt_money(m.options_result), "-"],
+                    [month, "Mercado Futuro", "Mercado futuro - dolar dos EUA", fmt_money(m.future_dollar_common), fmt_money(m.future_dollar_daytrade)],
+                    [month, "Mercado Futuro", "Mercado futuro - indices", fmt_money(m.future_index_common), fmt_money(m.future_index_daytrade)],
+                    [month, "Resultados", "RESULTADO LIQUIDO DO MES", fmt_money(common_result), fmt_money(daytrade_result)],
+                    [month, "Resultados", "Resultado negativo ate o mes anterior", fmt_money(m.normal_loss_before), fmt_money(m.daytrade_loss_before)],
+                    [month, "Resultados", "BASE DE CALCULO DO IMPOSTO", fmt_money(m.normal_base), fmt_money(m.daytrade_base)],
+                    [month, "Resultados", "Prejuizo a compensar", fmt_money(m.normal_loss_after), fmt_money(m.daytrade_loss_after)],
+                    [month, "Resultados", "Aliquota do imposto", "15,00 %", "20,00 %"],
+                    [month, "Resultados", "IMPOSTO DEVIDO", fmt_money(common_tax), fmt_money(daytrade_tax)],
+                    [month, "Consolidacao do Mes", "Total de imposto devido", fmt_money(m.tax_due), ""],
+                    [month, "Consolidacao do Mes", "Imposto a pagar", fmt_money(m.tax_due), ""],
+                ]
+            )
+        return rows
+
+    def _pdf_variable_month(self, story: list[Any], m: MonthlyTax) -> None:
+        month = MONTHS[m.month - 1]
+        future_dt = q2(m.future_dollar_daytrade + m.future_index_daytrade)
+        future_common = q2(m.future_result - future_dt)
+        common_result = q2((m.normal_result if m.exempt_stock_gain == 0 else Decimal("0")) + m.options_result + future_common)
+        daytrade_result = q2(m.daytrade_result + future_dt)
+        common_tax = q2(m.normal_base * Decimal("0.15"))
+        daytrade_tax = q2(m.daytrade_base * Decimal("0.20"))
+        rows = [
+            ["Mercado a Vista", "Operacoes Comuns", "Day Trade"],
+            ["Mercado a vista - acoes", fmt_money(m.normal_result), fmt_money(m.daytrade_result)],
+            ["Mercado a vista - ouro", "-", "-"],
+            ["Mercado a vista - ouro at. fin. fora bolsa", "-", "-"],
+            ["Mercado de Opcoes", "Operacoes Comuns", "Day Trade"],
+            ["Mercado opcoes - acoes", fmt_money(m.options_result), "-"],
+            ["Mercado opcoes - ouro", "-", "-"],
+            ["Mercado opcoes - fora de bolsa", "-", "-"],
+            ["Mercado opcoes - outros", "-", "-"],
+            ["Mercado Futuro", "Operacoes Comuns", "Day Trade"],
+            ["Mercado futuro - dolar dos EUA", fmt_money(m.future_dollar_common), fmt_money(m.future_dollar_daytrade)],
+            ["Mercado futuro - indices", fmt_money(m.future_index_common), fmt_money(m.future_index_daytrade)],
+            ["Mercado futuro - juros", "-", "-"],
+            ["Mercado futuro - outros", fmt_money(q2(future_common - m.future_dollar_common - m.future_index_common)), fmt_money(q2(future_dt - m.future_dollar_daytrade - m.future_index_daytrade))],
+            ["Mercado a Termo", "Operacoes Comuns", "Day Trade"],
+            ["Mercado a termo - acoes/ouro", "-", "-"],
+            ["Mercado a termo - outros", "-", "-"],
+            ["Resultados", "Operacoes Comuns", "Day Trade"],
+            ["RESULTADO LIQUIDO DO MES", fmt_money(common_result), fmt_money(daytrade_result)],
+            ["Resultado negativo ate o mes anterior", fmt_money(m.normal_loss_before), fmt_money(m.daytrade_loss_before)],
+            ["BASE DE CALCULO DO IMPOSTO", fmt_money(m.normal_base), fmt_money(m.daytrade_base)],
+            ["Prejuizo a compensar", fmt_money(m.normal_loss_after), fmt_money(m.daytrade_loss_after)],
+            ["Aliquota do imposto", "15%", "20%"],
+            ["IMPOSTO DEVIDO", fmt_money(common_tax), fmt_money(daytrade_tax)],
+            ["Consolidacao do Mes", "", ""],
+            ["Total do imposto devido", fmt_money(m.tax_due), ""],
+            ["IR fonte de Day Trade no mes", "0,00", ""],
+            ["IR fonte de Day Trade nos meses anteriores", "0,00", ""],
+            ["IR fonte de Day Trade a compensar", "0,00", ""],
+            ["IR fonte(Lei no 11.033/2004) no mes", "0,00", ""],
+            ["IR fonte(Lei no 11.033/2004) nos meses anteriores", "0,00", ""],
+            ["IR fonte(Lei no 11.033/2004) a compensar", "0,00", ""],
+            ["Imposto a pagar", fmt_money(m.tax_due), ""],
+            ["Imposto pago (valor + imposto acumulado + multa + juros)", "0,00", ""],
+        ]
+        self._pdf_table(story, f"Ganhos Liquidos ou Perdas em {month}", ["", "", ""], rows, section_rows={0, 4, 9, 14, 17, 24})
+
+    def _pdf_fii_monthly(self, story: list[Any], result: CalculationResult) -> None:
+        rows = [
+            [
+                MONTHS[m.month - 1],
+                fmt_money(m.fii_result),
+                fmt_money(m.fii_loss_before),
+                fmt_money(m.fii_base),
+                fmt_money(m.fii_loss_after),
+                "20,00 %",
+                fmt_money(m.fii_base * Decimal("0.20")),
+                "0,00",
+                "0,00",
+                "0,00",
+                "0,00",
+                "-",
+            ]
+            for m in result.monthly
+        ]
+        self._pdf_table(
+            story,
+            "Ganhos Liquidos ou Perdas",
+            [
+                "Mes",
+                "Resultado liquido no mes",
+                "Resultado negativo ate o mes anterior",
+                "Base de calculo do imposto",
+                "Prejuizo a compensar",
+                "Aliquota do imposto",
+                "Imposto devido",
+                "Saldo do imposto retido nos meses anteriores",
+                "Imposto retido no mes",
+                "Imposto a compensar",
+                "Imposto a pagar",
+                "Imposto pago",
+            ],
+            rows,
+        )
+
+    def _pdf_consolidated_reports(self, story: list[Any], styles: Any, year: int) -> None:
+        reports = self._consolidated_files_for_year(year)
+        if not reports:
+            return
+        for path in reports:
+            try:
+                sheets = read_consolidated_sheets(path)
+            except Exception as exc:
+                story.append(PageBreak())
+                self._pdf_header(story, styles, "Relatorio Consolidado B3", year)
+                self._pdf_table(story, path.name, ["Erro"], [[f"Falha ao ler arquivo: {exc}"]])
+                continue
+            for sheet in sheets:
+                story.append(PageBreak())
+                self._pdf_header(story, styles, "Relatorio Consolidado B3", year)
+                rows = sheet.get("rows") or [[""]]
+                columns = [str(col) for col in (sheet.get("columns") or ["Sem dados"])]
+                normalized_rows = [list(row[: len(columns)]) + [""] * max(0, len(columns) - len(row)) for row in rows]
+                title = f"{path.name} - {sheet.get('name') or 'Sheet'}"
+                self._pdf_table(story, title, columns, normalized_rows)
+
+    def _consolidated_files_for_year(self, year: int) -> list[Path]:
+        paths: list[Path] = []
+        for file in self.consolidated_files:
+            path = Path(file)
+            if not path.exists():
+                continue
+            period = parse_consolidated_period(path)
+            if period and period[0] == year:
+                paths.append(path)
+        return sorted(paths, key=lambda path: (parse_consolidated_period(path) or (year, 99))[1])
 
     def _pdf_header(self, story: list[Any], styles: Any, subtitle: str, year: int) -> None:
         story.append(Paragraph("DECLARACAO ANUAL DE IMPOSTO DE RENDA", styles["Title"]))
@@ -3712,22 +4067,31 @@ class IRSimpleApp:
         story.append(Paragraph(f"{subtitle} - Ano base: {year} - Exercicio: {year + 1}", styles["Heading2"]))
         story.append(Spacer(1, 0.25 * cm))
 
-    def _pdf_table(self, story: list[Any], title: str, headers: list[str], rows: list[list[Any]]) -> None:
+    def _pdf_table(self, story: list[Any], title: str, headers: list[str], rows: list[list[Any]], section_rows: set[int] | None = None) -> None:
         styles = getSampleStyleSheet()
         story.append(Paragraph(title, styles["Heading2"]))
-        data = [headers] + (rows if rows else [["-" for _ in headers]])
+        normal = styles["Normal"]
+        normal.fontSize = 7
+        normal.leading = 8
+        source_rows = rows if rows else [["-" for _ in headers]]
+        data = [[Paragraph(str(cell), normal) for cell in headers]] + [[Paragraph(str(cell), normal) for cell in row] for row in source_rows]
         table = Table(data, repeatRows=1)
-        table.setStyle(
-            TableStyle(
+        style_commands = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eaeaea")),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#c9c9c9")),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]
+        for idx in section_rows or set():
+            row = idx + 1
+            style_commands.extend(
                 [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#d9eaf7")),
-                    ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 7),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("BACKGROUND", (0, row), (-1, row), colors.HexColor("#f1f1f1")),
+                    ("FONTNAME", (0, row), (-1, row), "Helvetica-Bold"),
                 ]
             )
-        )
+        table.setStyle(TableStyle(style_commands))
         story.append(table)
         story.append(Spacer(1, 0.2 * cm))
 
