@@ -49,9 +49,9 @@ corp_events = [
         "factor": "1",
         "bonus_qty": "0",
         "bonus_cost": "0",
-        "broker_from": "BANCO MODAL S.A.",
+        "broker_from": "MODAL DTVM LTDA",
         "broker_to": "XP INVESTIMENTOS CCTVM S/A",
-        "obs": "Banco Modal adquirido pela XP em 30/08/2023. Conta Modal: CNPJ 30.723.886/0001-62",
+        "obs": "Banco Modal (MODAL DTVM LTDA / BANCO MODAL S.A.) adquirido pela XP em 30/08/2023. CNPJ 30.723.886/0001-62",
     },
 ]
 

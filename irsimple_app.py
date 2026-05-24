@@ -1443,9 +1443,23 @@ class IRSimpleEngine:
                 # Fusão de corretora: atualiza broker de todas as posicoes da corretora origem
                 broker_from = str(ev.get("broker_from") or "")
                 if broker_from and broker_to:
+                    # palavras significativas do nome da corretora origem (ignora siglas genéricas)
+                    _skip = {"s", "a", "sa", "ltda", "s_a", "de", "do", "da", "e", "em", "banco",
+                             "corretora", "cctvm", "ctvm", "dtvm", "cv", "cc", "investimentos"}
+                    _words_from = {w for w in normalize_header(broker_from).split("_") if w and w not in _skip and len(w) > 2}
+                    def _broker_matches(pos_broker: str) -> bool:
+                        if not pos_broker:
+                            return False
+                        norm_pos = normalize_header(pos_broker)
+                        # correspondência exata
+                        if norm_pos == normalize_header(broker_from):
+                            return True
+                        # correspondência por palavras-chave significativas
+                        _words_pos = set(norm_pos.split("_"))
+                        return bool(_words_from & _words_pos)
                     moved: list[str] = []
                     for pos in positions.values():
-                        if pos.broker and normalize_header(pos.broker) == normalize_header(broker_from):
+                        if _broker_matches(pos.broker or ""):
                             pos.broker = broker_to
                             moved.append(pos.code)
                     if moved:
