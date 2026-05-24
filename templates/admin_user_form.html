@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-12 col-md-7">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">
+        <i class="bi bi-person-plus me-1"></i>
+        {{ "Editar Usuario" if user else "Novo Usuario" }}
+      </div>
+      <div class="card-body">
+        <form method="post" class="row g-3">
+
+          <div class="col-md-6">
+            <label class="form-label">Username <span class="text-danger">*</span></label>
+            {% if user %}
+              <input type="text" class="form-control bg-light" value="{{ user.username }}" disabled>
+            {% else %}
+              <input type="text" class="form-control" name="username" required placeholder="ex: joao.silva">
+            {% endif %}
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">E-mail</label>
+            <input type="email" class="form-control" name="email" value="{{ user.email if user else '' }}">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Nome Completo</label>
+            <input type="text" class="form-control" name="full_name" value="{{ user.full_name if user else '' }}">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">WhatsApp</label>
+            <input type="text" class="form-control" name="whatsapp" value="{{ user.whatsapp if user else '' }}">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Perfil</label>
+            <select class="form-select" name="role">
+              <option value="user" {{ 'selected' if not user or user.role == 'user' }}>Padrao</option>
+              <option value="admin" {{ 'selected' if user and user.role == 'admin' }}>Admin</option>
+            </select>
+          </div>
+          <div class="col-12"><hr class="my-1"></div>
+          <div class="col-md-6">
+            <label class="form-label">
+              {{ "Nova Senha (deixe em branco para manter)" if user else "Senha *" }}
+            </label>
+            <input type="password" class="form-control" name="password"
+                   autocomplete="new-password" minlength="8"
+                   {{ 'required' if not user }}>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Confirmar Senha</label>
+            <input type="password" class="form-control" name="confirm_password"
+                   autocomplete="new-password" minlength="8"
+                   {{ 'required' if not user }}>
+          </div>
+
+          <div class="col-12 d-flex gap-2 justify-content-end">
+            <a href="{{ url_for('admin') }}" class="btn btn-outline-secondary">Cancelar</a>
+            <button type="submit" class="btn btn-primary">
+              <i class="bi bi-floppy me-1"></i>Salvar
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

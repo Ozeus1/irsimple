@@ -756,10 +756,21 @@ def init_db() -> None:
             );
             """
         )
-        existing = {row["name"] for row in conn.execute("PRAGMA table_info(brokerage_note_taxes)").fetchall()}
+        existing_bn = {row["name"] for row in conn.execute("PRAGMA table_info(brokerage_note_taxes)").fetchall()}
         for column in ["buy_normal", "sell_normal", "buy_fii", "sell_fii", "buy_options", "sell_options"]:
-            if column not in existing:
+            if column not in existing_bn:
                 conn.execute(f"ALTER TABLE brokerage_note_taxes ADD COLUMN {column} TEXT")
+        existing_u = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        for col_def in [
+            ("role", "TEXT NOT NULL DEFAULT 'user'"),
+            ("full_name", "TEXT NOT NULL DEFAULT ''"),
+            ("whatsapp", "TEXT NOT NULL DEFAULT ''"),
+            ("password_hash", "TEXT NOT NULL DEFAULT ''"),
+            ("photo", "TEXT NOT NULL DEFAULT ''"),
+            ("email", "TEXT NOT NULL DEFAULT ''"),
+        ]:
+            if col_def[0] not in existing_u:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {col_def[0]} {col_def[1]}")
         conn.execute("INSERT OR IGNORE INTO users (username) VALUES (?)", (DEFAULT_USER,))
 
 

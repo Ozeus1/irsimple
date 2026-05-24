@@ -38,7 +38,8 @@ app = Flask(__name__)
 app.secret_key = SECRET_KEY
 
 
-LOGIN_EMAIL = os.environ.get("IRSIMPLE_LOGIN_EMAIL", "orlei1@yahoo.com").strip().lower()
+ADMIN_EMAIL = os.environ.get("IRSIMPLE_LOGIN_EMAIL", "orlei1@yahoo.com").strip().lower()
+LOGIN_EMAIL = ADMIN_EMAIL  # compatibilidade com codigo legado
 PASSWORD_HASH = os.environ.get("IRSIMPLE_PASSWORD_HASH", "").strip()
 TEMP_PASSWORD = os.environ.get("IRSIMPLE_TEMP_PASSWORD", "IRSimple@Reset2026")
 
@@ -55,12 +56,26 @@ def date_input_filter(value: Any) -> str:
 
 
 def current_username() -> str:
-    username = session.get("username") or LOGIN_EMAIL or core.DEFAULT_USER
-    return str(username).strip().lower() or core.DEFAULT_USER
+    return str(session.get("username") or "").strip().lower() or core.DEFAULT_USER
+
+
+def current_user_row() -> sqlite3.Row | None:
+    username = current_username()
+    with core.db_connect() as conn:
+        return conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+
+
+def current_user_role() -> str:
+    row = current_user_row()
+    return str(row["role"] or "user") if row else "user"
 
 
 def is_authenticated() -> bool:
-    return bool(session.get("authenticated") and str(session.get("username", "")).lower() == LOGIN_EMAIL)
+    return bool(session.get("authenticated") and session.get("user_id"))
+
+
+def is_admin() -> bool:
+    return is_authenticated() and current_user_role() == "admin"
 
 
 def login_required(view: Callable[..., Any]) -> Callable[..., Any]:
@@ -69,11 +84,23 @@ def login_required(view: Callable[..., Any]) -> Callable[..., Any]:
         if not is_authenticated():
             return redirect(url_for("index", next=request.full_path if request.query_string else request.path))
         return view(*args, **kwargs)
+    return wrapped
 
+
+def admin_required(view: Callable[..., Any]) -> Callable[..., Any]:
+    @wraps(view)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        if not is_admin():
+            flash("Acesso restrito a administradores.", "danger")
+            return redirect(url_for("dashboard"))
+        return view(*args, **kwargs)
     return wrapped
 
 
 def current_user_id() -> int:
+    uid = session.get("user_id")
+    if uid:
+        return int(uid)
     return core.get_user_id(current_username())
 
 
@@ -104,38 +131,45 @@ def db_rows(sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         return conn.execute(sql, params).fetchall()
 
 
-def password_hash_from_db() -> str:
+def get_user_password_hash(username: str) -> str:
+    with core.db_connect() as conn:
+        row = conn.execute("SELECT password_hash FROM users WHERE username = ?", (username,)).fetchone()
+    if row and row["password_hash"]:
+        return str(row["password_hash"])
+    # fallback legado: app_config
     try:
-        user_id = core.get_user_id(LOGIN_EMAIL)
-        rows = db_rows("SELECT value FROM app_config WHERE user_id = ? AND key = 'login_password_hash'", (user_id,))
+        uid = core.get_user_id(username)
+        rows = db_rows("SELECT value FROM app_config WHERE user_id = ? AND key = 'login_password_hash'", (uid,))
         return str(rows[0]["value"] or "") if rows else ""
     except Exception:
         return ""
 
 
-def configured_password_hash() -> str:
-    return password_hash_from_db() or PASSWORD_HASH
-
-
-def verify_login_password(password: str) -> bool:
-    stored_hash = configured_password_hash()
+def verify_user_password(username: str, password: str) -> bool:
+    stored_hash = get_user_password_hash(username)
     if stored_hash:
         return check_password_hash(stored_hash, password)
-    return password == TEMP_PASSWORD
+    if username == ADMIN_EMAIL:
+        return password == TEMP_PASSWORD
+    return False
 
 
 def using_temporary_password() -> bool:
-    return not bool(configured_password_hash())
+    return not bool(get_user_password_hash(current_username()))
+
+
+def save_user_password(username: str, password: str) -> None:
+    h = generate_password_hash(password)
+    with core.db_connect() as conn:
+        conn.execute("UPDATE users SET password_hash = ? WHERE username = ?", (h, username))
+        # limpa legado app_config
+        uid_row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+        if uid_row:
+            conn.execute("DELETE FROM app_config WHERE user_id = ? AND key = 'login_password_hash'", (uid_row["id"],))
 
 
 def save_login_password(password: str) -> None:
-    user_id = core.get_user_id(LOGIN_EMAIL)
-    password_hash = generate_password_hash(password)
-    with core.db_connect() as conn:
-        conn.execute(
-            "INSERT INTO app_config (user_id, key, value) VALUES (?, 'login_password_hash', ?) ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
-            (user_id, password_hash),
-        )
+    save_user_password(current_username(), password)
 
 
 def save_uploaded_file(field_name: str, subfolder: str = "") -> Path | None:
@@ -576,33 +610,11 @@ def consume_reset_token(token: str) -> None:
 
 
 def reset_password_for_email(email: str, new_password: str) -> bool:
-    with core.db_connect() as conn:
-        row = conn.execute("SELECT id FROM users WHERE username = ?", (email,)).fetchone()
-    if not row:
+    user = find_user_by_login(email)
+    if not user:
         return False
-    user_id = int(row["id"])
-    password_hash = generate_password_hash(new_password)
-    with core.db_connect() as conn:
-        conn.execute(
-            "INSERT INTO app_config (user_id, key, value) VALUES (?, 'login_password_hash', ?) "
-            "ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
-            (user_id, password_hash),
-        )
+    save_user_password(str(user["username"]), new_password)
     return True
-
-
-def is_admin() -> bool:
-    return bool(session.get("authenticated") and str(session.get("username", "")).lower() == LOGIN_EMAIL)
-
-
-def admin_required(view: Callable[..., Any]) -> Callable[..., Any]:
-    @wraps(view)
-    def wrapped(*args: Any, **kwargs: Any) -> Any:
-        if not is_admin():
-            flash("Acesso restrito a administradores.", "danger")
-            return redirect(url_for("index"))
-        return view(*args, **kwargs)
-    return wrapped
 
 
 def loss_effect_date(base_date: date | None) -> date | None:
@@ -1253,25 +1265,52 @@ def inject_helpers() -> dict[str, Any]:
     }
 
 
+def find_user_by_login(login: str) -> sqlite3.Row | None:
+    """Busca usuario por username ou email."""
+    with core.db_connect() as conn:
+        row = conn.execute("SELECT * FROM users WHERE username = ?", (login,)).fetchone()
+        if not row:
+            row = conn.execute("SELECT * FROM users WHERE email = ?", (login,)).fetchone()
+    return row
+
+
+def ensure_admin_exists() -> None:
+    """Garante que o usuario admin existe com role=admin."""
+    core.init_db()
+    with core.db_connect() as conn:
+        row = conn.execute("SELECT id, role FROM users WHERE username = ?", (ADMIN_EMAIL,)).fetchone()
+        if row:
+            if str(row["role"] or "") != "admin":
+                conn.execute("UPDATE users SET role = 'admin', email = ? WHERE username = ?", (ADMIN_EMAIL, ADMIN_EMAIL))
+        else:
+            conn.execute(
+                "INSERT INTO users (username, email, role) VALUES (?, ?, 'admin')",
+                (ADMIN_EMAIL, ADMIN_EMAIL),
+            )
+
+
 @app.route("/", methods=["GET", "POST"])
 def index() -> str | Response:
+    ensure_admin_exists()
     if request.method == "POST":
-        username = request.form.get("username", "").strip().lower()
+        login = request.form.get("username", "").strip().lower()
         password = request.form.get("password", "")
-        if username != LOGIN_EMAIL or not verify_login_password(password):
+        user = find_user_by_login(login)
+        if not user or not verify_user_password(str(user["username"]), password):
             flash("Usuario ou senha invalidos.", "danger")
-            return render_template("login.html", login_email=username or LOGIN_EMAIL)
+            return render_template("login.html", login_email=login or ADMIN_EMAIL)
         session.clear()
         session["authenticated"] = True
-        session["username"] = LOGIN_EMAIL
-        core.get_user_id(LOGIN_EMAIL)
-        if using_temporary_password():
+        session["username"] = str(user["username"])
+        session["user_id"] = int(user["id"])
+        session["role"] = str(user["role"] or "user")
+        if not get_user_password_hash(str(user["username"])):
             flash("Acesso feito com senha temporaria. Cadastre uma nova senha.", "warning")
             return redirect(url_for("change_password"))
-        flash(f"Usuario autenticado: {LOGIN_EMAIL}", "success")
+        flash(f"Bem-vindo, {user['full_name'] or user['username']}!", "success")
         next_url = request.args.get("next") or url_for("dashboard")
         return redirect(next_url if next_url.startswith("/") and not next_url.startswith("//") else url_for("dashboard"))
-    return render_template("login.html", login_email=LOGIN_EMAIL)
+    return render_template("login.html", login_email=ADMIN_EMAIL)
 
 
 @app.route("/logout", methods=["POST"])
@@ -1288,7 +1327,7 @@ def change_password() -> str | Response:
         current = request.form.get("current_password", "")
         new = request.form.get("new_password", "")
         confirm = request.form.get("confirm_password", "")
-        if not verify_login_password(current):
+        if not verify_user_password(current_username(), current):
             flash("Senha atual invalida.", "danger")
         elif len(new) < 8:
             flash("A nova senha deve ter pelo menos 8 caracteres.", "warning")
@@ -1305,7 +1344,8 @@ def change_password() -> str | Response:
 def forgot_password() -> str | Response:
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
-        if email == LOGIN_EMAIL:
+        user = find_user_by_login(email)
+        if user:
             try:
                 token = create_reset_token(email)
                 reset_url = url_for("reset_password", token=token, _external=True)
@@ -1405,6 +1445,106 @@ def admin_delete_user(user_id: int) -> Response:
         else:
             flash("Usuario nao encontrado.", "warning")
     return redirect(url_for("admin"))
+
+
+@app.route("/admin/usuario/novo", methods=["GET", "POST"])
+@admin_required
+def admin_new_user() -> str | Response:
+    if request.method == "POST":
+        username = request.form.get("username", "").strip().lower()
+        email = request.form.get("email", "").strip().lower()
+        full_name = request.form.get("full_name", "").strip()
+        whatsapp = request.form.get("whatsapp", "").strip()
+        role = request.form.get("role", "user")
+        password = request.form.get("password", "")
+        confirm = request.form.get("confirm_password", "")
+        if not username:
+            flash("Username obrigatorio.", "warning")
+        elif len(password) < 8:
+            flash("Senha deve ter pelo menos 8 caracteres.", "warning")
+        elif password != confirm:
+            flash("As senhas nao conferem.", "warning")
+        else:
+            try:
+                h = generate_password_hash(password)
+                with core.db_connect() as conn:
+                    conn.execute(
+                        "INSERT INTO users (username, email, full_name, whatsapp, role, password_hash) VALUES (?,?,?,?,?,?)",
+                        (username, email, full_name, whatsapp, role, h),
+                    )
+                flash(f"Usuario '{username}' criado com sucesso.", "success")
+                return redirect(url_for("admin"))
+            except Exception as exc:
+                flash(f"Erro ao criar usuario: {exc}", "danger")
+    return render_template("admin_user_form.html", user=None)
+
+
+@app.route("/admin/usuario/<int:user_id>/edit", methods=["GET", "POST"])
+@admin_required
+def admin_edit_user(user_id: int) -> str | Response:
+    with core.db_connect() as conn:
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user:
+        flash("Usuario nao encontrado.", "warning")
+        return redirect(url_for("admin"))
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        full_name = request.form.get("full_name", "").strip()
+        whatsapp = request.form.get("whatsapp", "").strip()
+        role = request.form.get("role", "user")
+        password = request.form.get("password", "")
+        confirm = request.form.get("confirm_password", "")
+        with core.db_connect() as conn:
+            conn.execute(
+                "UPDATE users SET email=?, full_name=?, whatsapp=?, role=? WHERE id=?",
+                (email, full_name, whatsapp, role, user_id),
+            )
+        if password:
+            if len(password) < 8:
+                flash("Senha deve ter pelo menos 8 caracteres.", "warning")
+                return render_template("admin_user_form.html", user=user)
+            if password != confirm:
+                flash("As senhas nao conferem.", "warning")
+                return render_template("admin_user_form.html", user=user)
+            save_user_password(str(user["username"]), password)
+        flash("Usuario atualizado.", "success")
+        return redirect(url_for("admin"))
+    return render_template("admin_user_form.html", user=user)
+
+
+@app.route("/perfil", methods=["GET", "POST"])
+@login_required
+def perfil() -> str | Response:
+    user = current_user_row()
+    if request.method == "POST":
+        full_name = request.form.get("full_name", "").strip()
+        whatsapp = request.form.get("whatsapp", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        photo_path = str(user["photo"] or "") if user else ""
+        photo_file = request.files.get("photo")
+        if photo_file and photo_file.filename:
+            ext = Path(secure_filename(photo_file.filename)).suffix.lower()
+            if ext in {".jpg", ".jpeg", ".png", ".webp"}:
+                fname = f"photo_{current_username()}{ext}"
+                dest = UPLOAD_DIR / "photos"
+                dest.mkdir(parents=True, exist_ok=True)
+                photo_file.save(dest / fname)
+                photo_path = f"photos/{fname}"
+        with core.db_connect() as conn:
+            conn.execute(
+                "UPDATE users SET full_name=?, whatsapp=?, email=?, photo=? WHERE id=?",
+                (full_name, whatsapp, email, photo_path, current_user_id()),
+            )
+        flash("Perfil atualizado.", "success")
+        return redirect(url_for("perfil"))
+    return render_template("perfil.html", user=user)
+
+
+@app.route("/perfil/foto/<path:filename>")
+@login_required
+def perfil_foto(filename: str) -> Response:
+    safe = secure_filename(Path(filename).name)
+    return send_file(UPLOAD_DIR / "photos" / safe)
 
 
 @app.route("/dashboard")

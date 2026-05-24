@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-12 col-md-8 col-lg-6">
+
+    <div class="card shadow-sm mb-4">
+      <div class="card-header fw-semibold">
+        <i class="bi bi-person-circle me-1"></i> Dados do Perfil
+      </div>
+      <div class="card-body">
+        <form method="post" enctype="multipart/form-data" class="row g-3">
+
+          <div class="col-12 text-center">
+            {% if user and user.photo %}
+              <img src="{{ url_for('perfil_foto', filename=user.photo) }}"
+                   class="rounded-circle border shadow-sm mb-2"
+                   style="width:96px;height:96px;object-fit:cover;">
+            {% else %}
+              <div class="rounded-circle bg-secondary d-inline-flex align-items-center justify-content-center mb-2"
+                   style="width:96px;height:96px;">
+                <i class="bi bi-person-fill text-white fs-1"></i>
+              </div>
+            {% endif %}
+            <div>
+              <label class="form-label small text-muted">Foto de Perfil</label><br>
+              <input type="file" class="form-control form-control-sm d-inline-block w-auto" name="photo" accept=".jpg,.jpeg,.png,.webp">
+              <div class="form-text">JPG, PNG ou WEBP &middot; máx. 2 MB</div>
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">Nome Completo</label>
+            <input type="text" class="form-control" name="full_name" value="{{ user.full_name if user else '' }}">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">WhatsApp</label>
+            <input type="text" class="form-control" name="whatsapp" value="{{ user.whatsapp if user else '' }}" placeholder="85986961615">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Login (username)</label>
+            <input type="text" class="form-control bg-light" value="{{ user.username if user else '' }}" disabled>
+            <div class="form-text">O login só pode ser alterado por um administrador.</div>
+          </div>
+          <div class="col-12">
+            <label class="form-label">E-mail</label>
+            <input type="email" class="form-control" name="email" value="{{ user.email if user else '' }}">
+          </div>
+          <div class="col-12 text-end">
+            <button type="submit" class="btn btn-primary">
+              <i class="bi bi-check2 me-1"></i>Salvar Perfil
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">
+        <i class="bi bi-key me-1"></i> Alterar Senha
+      </div>
+      <div class="card-body">
+        <form method="post" action="{{ url_for('change_password') }}" class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label">Senha Atual</label>
+            <input type="password" class="form-control" name="current_password" autocomplete="current-password" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Nova Senha</label>
+            <input type="password" class="form-control" name="new_password" autocomplete="new-password" minlength="8" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Confirmar</label>
+            <input type="password" class="form-control" name="confirm_password" autocomplete="new-password" minlength="8" required>
+          </div>
+          <div class="col-12 text-end">
+            <button type="submit" class="btn btn-warning">
+              <i class="bi bi-shield-lock me-1"></i>Alterar Senha
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}
