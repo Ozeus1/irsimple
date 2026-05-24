@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="mb-1">Eventos Corporativos</h1>
+<p class="text-muted mb-4">
+  Registre splits, grupamentos, bonificacoes, aquisicoes de corretoras e renomeacoes de ticker.
+  Esses eventos sao aplicados antes do calculo das posicoes.
+</p>
+
+<div class="card shadow-sm mb-4">
+  <div class="card-header fw-semibold"><i class="bi bi-plus-circle me-1"></i> Novo evento</div>
+  <div class="card-body">
+    <form method="post" class="row g-2 align-items-end" id="corpForm">
+      <input type="hidden" name="action" value="add">
+
+      <div class="col-md-2">
+        <label class="form-label">Data <span class="text-danger">*</span></label>
+        <input type="date" class="form-control form-control-sm" name="event_date" required>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Tipo <span class="text-danger">*</span></label>
+        <select class="form-select form-select-sm" name="event_type" id="evtType" required onchange="toggleFields()">
+          <option value="">-- selecione --</option>
+          <option value="split">Split / Desdobramento</option>
+          <option value="grupamento">Grupamento (inplit)</option>
+          <option value="bonificacao">Bonificacao / Subscricao</option>
+          <option value="fusao_corretora">Fusao / Aquisicao de Corretora</option>
+          <option value="renomeacao">Renomeacao de Ticker</option>
+          <option value="conversao">Conversao de Ativo</option>
+        </select>
+      </div>
+      <div class="col-md-1" id="fTicker">
+        <label class="form-label">Ticker</label>
+        <input type="text" class="form-control form-control-sm" name="ticker" placeholder="PETR4" style="text-transform:uppercase">
+      </div>
+      <div class="col-md-1" id="fTickerNew">
+        <label class="form-label">Ticker novo</label>
+        <input type="text" class="form-control form-control-sm" name="ticker_new" placeholder="PETR3" style="text-transform:uppercase">
+      </div>
+      <div class="col-md-1" id="fFactor">
+        <label class="form-label">Fator</label>
+        <input type="text" class="form-control form-control-sm" name="factor" value="1" placeholder="ex: 4">
+        <div class="form-text">Split=4 → 1 vira 4</div>
+      </div>
+      <div class="col-md-1" id="fBonusQty">
+        <label class="form-label">Qtd bonus</label>
+        <input type="text" class="form-control form-control-sm" name="bonus_qty" value="0">
+      </div>
+      <div class="col-md-1" id="fBonusCost">
+        <label class="form-label">Custo bonus</label>
+        <input type="text" class="form-control form-control-sm" name="bonus_cost" value="0">
+      </div>
+      <div class="col-md-2" id="fBrokerFrom">
+        <label class="form-label">Corretora origem</label>
+        <input type="text" class="form-control form-control-sm" name="broker_from" placeholder="BANCO MODAL S.A.">
+      </div>
+      <div class="col-md-2" id="fBrokerTo">
+        <label class="form-label">Corretora destino</label>
+        <input type="text" class="form-control form-control-sm" name="broker_to" placeholder="XP INVESTIMENTOS CCTVM S/A">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Observacao</label>
+        <input type="text" class="form-control form-control-sm" name="obs" placeholder="ex: Banco Modal adquirido pela XP em 30/08/2023">
+      </div>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-primary btn-sm w-100">
+          <i class="bi bi-plus-lg me-1"></i>Adicionar
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-header fw-semibold">
+    <i class="bi bi-calendar-event me-1"></i> Eventos registrados ({{ rows | length }})
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Data</th><th>Tipo</th><th>Ticker</th><th>Ticker novo</th>
+            <th>Fator</th><th>Qtd bonus</th><th>Custo bonus</th>
+            <th>Corretora origem</th><th>Corretora destino</th><th>Obs</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td class="text-nowrap">{{ r.event_date }}</td>
+            <td>
+              {% set type_labels = {
+                'split': 'Split',
+                'grupamento': 'Grupamento',
+                'bonificacao': 'Bonificacao',
+                'fusao_corretora': 'Fusao/Aquisicao',
+                'renomeacao': 'Renomeacao',
+                'conversao': 'Conversao'
+              } %}
+              <span class="badge
+                {% if r.event_type == 'split' %}bg-info text-dark
+                {% elif r.event_type == 'grupamento' %}bg-warning text-dark
+                {% elif r.event_type == 'bonificacao' %}bg-success
+                {% elif r.event_type == 'fusao_corretora' %}bg-primary
+                {% else %}bg-secondary{% endif %}">
+                {{ type_labels.get(r.event_type, r.event_type) }}
+              </span>
+            </td>
+            <td class="fw-semibold">{{ r.ticker or '-' }}</td>
+            <td>{{ r.ticker_new or '-' }}</td>
+            <td class="text-end">{{ r.factor }}</td>
+            <td class="text-end">{{ r.bonus_qty }}</td>
+            <td class="text-end">{{ r.bonus_cost }}</td>
+            <td class="small">{{ r.broker_from or '-' }}</td>
+            <td class="small">{{ r.broker_to or '-' }}</td>
+            <td class="text-muted small">{{ r.obs or '' }}</td>
+            <td>
+              <form method="post" class="d-inline"
+                    onsubmit="return confirm('Excluir este evento?')">
+                <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="item_id" value="{{ r.id }}">
+                <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="11" class="text-center text-muted py-3">Nenhum evento registrado.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="alert alert-info mt-4">
+  <i class="bi bi-info-circle me-1"></i>
+  <strong>Tipos de evento:</strong>
+  <ul class="mb-0 mt-1">
+    <li><strong>Split/Desdobramento:</strong> fator 4 = cada acao vira 4. Multiplica a quantidade.</li>
+    <li><strong>Grupamento:</strong> fator 4 = cada 4 acoes viram 1. Divide a quantidade.</li>
+    <li><strong>Bonificacao:</strong> acrescenta quantidade e custo ao ativo.</li>
+    <li><strong>Fusao/Aquisicao de Corretora:</strong> migra <em>todos</em> os ativos da corretora origem para destino
+      (ex: Banco Modal → XP em 30/08/2023).</li>
+    <li><strong>Renomeacao/Conversao:</strong> renomeia o ticker (ex: NATU3 → NTCO3).</li>
+  </ul>
+</div>
+
+<script>
+function toggleFields() {
+  var t = document.getElementById('evtType').value;
+  var isFusao = t === 'fusao_corretora';
+  var isSplit = t === 'split' || t === 'grupamento';
+  var isBonus = t === 'bonificacao';
+  var isRename = t === 'renomeacao' || t === 'conversao';
+
+  document.getElementById('fTicker').style.display     = isFusao ? 'none' : '';
+  document.getElementById('fTickerNew').style.display  = isRename ? '' : 'none';
+  document.getElementById('fFactor').style.display     = (isSplit || isBonus) ? '' : 'none';
+  document.getElementById('fBonusQty').style.display   = isBonus ? '' : 'none';
+  document.getElementById('fBonusCost').style.display  = isBonus ? '' : 'none';
+  document.getElementById('fBrokerFrom').style.display = isFusao ? '' : 'none';
+  document.getElementById('fBrokerTo').style.display   = isFusao ? '' : 'none';
+}
+toggleFields();
+</script>
+{% endblock %}

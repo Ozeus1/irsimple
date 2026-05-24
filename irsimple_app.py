@@ -754,6 +754,39 @@ def init_db() -> None:
                 from_addr TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS custody_transfers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                transfer_date TEXT NOT NULL,
+                protocol TEXT NOT NULL DEFAULT '',
+                broker_from TEXT NOT NULL DEFAULT '',
+                account_from TEXT NOT NULL DEFAULT '',
+                broker_to TEXT NOT NULL DEFAULT '',
+                account_to TEXT NOT NULL DEFAULT '',
+                ticker TEXT NOT NULL,
+                asset_type TEXT NOT NULL DEFAULT '',
+                quantity TEXT NOT NULL DEFAULT '0',
+                status TEXT NOT NULL DEFAULT 'finalizado',
+                obs TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS corporate_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                event_date TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                ticker TEXT NOT NULL,
+                ticker_new TEXT NOT NULL DEFAULT '',
+                factor TEXT NOT NULL DEFAULT '1',
+                bonus_qty TEXT NOT NULL DEFAULT '0',
+                bonus_cost TEXT NOT NULL DEFAULT '0',
+                broker_from TEXT NOT NULL DEFAULT '',
+                broker_to TEXT NOT NULL DEFAULT '',
+                obs TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
             """
         )
         existing_bn = {row["name"] for row in conn.execute("PRAGMA table_info(brokerage_note_taxes)").fetchall()}
@@ -1079,6 +1112,8 @@ class IRSimpleEngine:
         dated_losses: dict[str, Decimal] | None = None,
         dated_loss_start: date | None = None,
         brokerage_taxes: list[BrokerageNoteTax] | None = None,
+        custody_transfers: list[dict[str, Any]] | None = None,
+        corporate_events: list[dict[str, Any]] | None = None,
     ) -> CalculationResult:
         positions: dict[str, Position] = {}
         warnings: list[str] = []
@@ -1101,6 +1136,10 @@ class IRSimpleEngine:
         year_trades = [t for t in trades if t.dt.year == self.year]
         year_trades.sort(key=lambda t: (t.dt, t.code, t.side))
 
+        if corporate_events:
+            self._apply_corporate_events(positions, corporate_events, self.year, warnings)
+        if custody_transfers:
+            self._apply_custody_transfers(positions, custody_transfers, self.year, warnings)
         self._apply_events_before_trades(positions, events, warnings)
         trades_after_daytrade = self._split_daytrades(year_trades, monthly)
         normal_trades = [trade for trade in trades_after_daytrade if trade.category != "opcoes"]
@@ -1319,9 +1358,116 @@ class IRSimpleEngine:
             elif "transferencia" in kind or "migracao" in kind:
                 pos.qty += qty
                 pos.cost = q2(pos.cost + value)
+                broker_to = str(event.get("corretora") or event.get("broker_to") or "")
+                if broker_to:
+                    pos.broker = broker_to
             elif "exercicio" in kind:
                 pos.qty += qty
                 pos.cost = q2(pos.cost + value)
+
+    def _apply_custody_transfers(
+        self,
+        positions: dict[str, Position],
+        transfers: list[dict[str, Any]],
+        year: int,
+        warnings: list[str],
+    ) -> None:
+        """Aplica transferencias de custodia (portabilidade B3) nas posicoes."""
+        for t in transfers:
+            dt = parse_date(t.get("transfer_date"))
+            if dt is None or dt.year > year:
+                continue
+            code = normalize_ticker(t.get("ticker", ""))
+            if not code:
+                continue
+            qty = money(t.get("quantity", "0"))
+            broker_to = str(t.get("broker_to") or "")
+            if code in positions:
+                pos = positions[code]
+                if broker_to:
+                    pos.broker = broker_to
+            else:
+                warnings.append(
+                    f"Transferencia de custodia: ativo {code} em {dt:%d/%m/%Y} nao encontrado nas posicoes. "
+                    f"Corretora destino: {broker_to}. Verifique se o ativo foi importado corretamente."
+                )
+
+    def _apply_corporate_events(
+        self,
+        positions: dict[str, Position],
+        corp_events: list[dict[str, Any]],
+        year: int,
+        warnings: list[str],
+    ) -> None:
+        """Aplica eventos corporativos: split, grupamento, bonificacao, fusao de corretora."""
+        for ev in corp_events:
+            dt = parse_date(ev.get("event_date"))
+            if dt is None or dt.year > year:
+                continue
+            etype = normalize_header(ev.get("event_type", ""))
+            code = normalize_ticker(ev.get("ticker", ""))
+            code_new = normalize_ticker(ev.get("ticker_new", "")) or code
+            factor = money(ev.get("factor", "1"))
+            bonus_qty = money(ev.get("bonus_qty", "0"))
+            bonus_cost = money(ev.get("bonus_cost", "0"))
+            broker_to = str(ev.get("broker_to") or "")
+
+            if "desdobramento" in etype or "split" in etype:
+                if code in positions:
+                    f = factor if factor > 0 else Decimal("1")
+                    positions[code].qty = q2(positions[code].qty * f)
+                    warnings.append(
+                        f"Split/desdobramento em {code} em {dt:%d/%m/%Y}: fator {fmt_decimal(f)}. "
+                        f"Nova quantidade: {fmt_decimal(positions[code].qty)}."
+                    )
+
+            elif "grupamento" in etype or "inplit" in etype:
+                if code in positions:
+                    f = factor if factor > 0 else Decimal("1")
+                    positions[code].qty = q2(positions[code].qty / f)
+                    warnings.append(
+                        f"Grupamento em {code} em {dt:%d/%m/%Y}: fator 1/{fmt_decimal(f)}. "
+                        f"Nova quantidade: {fmt_decimal(positions[code].qty)}."
+                    )
+
+            elif "bonificacao" in etype or "subscricao" in etype:
+                pos = positions.setdefault(code_new, Position(code=code_new, category="normal"))
+                pos.qty += bonus_qty
+                pos.cost = q2(pos.cost + bonus_cost)
+                warnings.append(
+                    f"Bonificacao em {code_new} em {dt:%d/%m/%Y}: +{fmt_decimal(bonus_qty)} cotas/acoes, "
+                    f"custo adicional R$ {fmt_money(bonus_cost)}."
+                )
+
+            elif "fusao" in etype or "incorporacao" in etype or "migracao_corretora" in etype or "aquisicao" in etype:
+                # Fusão de corretora: atualiza broker de todas as posicoes da corretora origem
+                broker_from = str(ev.get("broker_from") or "")
+                if broker_from and broker_to:
+                    moved: list[str] = []
+                    for pos in positions.values():
+                        if pos.broker and normalize_header(pos.broker) == normalize_header(broker_from):
+                            pos.broker = broker_to
+                            moved.append(pos.code)
+                    if moved:
+                        warnings.append(
+                            f"Fusao/aquisicao em {dt:%d/%m/%Y}: {len(moved)} ativo(s) migrados de "
+                            f"'{broker_from}' para '{broker_to}': {', '.join(sorted(moved)[:10])}{'...' if len(moved)>10 else ''}."
+                        )
+                elif code and broker_to:
+                    # Migração de ativo específico
+                    if code in positions:
+                        positions[code].broker = broker_to
+
+            elif "renomeacao" in etype or "conversao" in etype:
+                if code in positions and code_new and code_new != code:
+                    pos_old = positions.pop(code)
+                    pos_new = positions.setdefault(code_new, Position(code=code_new, category=pos_old.category, broker=pos_old.broker))
+                    pos_new.qty += pos_old.qty
+                    pos_new.cost = q2(pos_new.cost + pos_old.cost)
+                    warnings.append(
+                        f"Renomeacao/conversao: {code} -> {code_new} em {dt:%d/%m/%Y}. "
+                        f"Quantidade transferida: {fmt_decimal(pos_old.qty)}."
+                    )
 
     def _apply_income_movements(self, movements: list[Movement], monthly: list[MonthlyTax]) -> None:
         for mov in movements:

@@ -389,6 +389,22 @@ def load_events() -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def load_custody_transfers() -> list[dict[str, Any]]:
+    rows = db_rows(
+        "SELECT * FROM custody_transfers WHERE user_id = ? ORDER BY transfer_date, id",
+        (current_user_id(),),
+    )
+    return [dict(row) for row in rows]
+
+
+def load_corporate_events() -> list[dict[str, Any]]:
+    rows = db_rows(
+        "SELECT * FROM corporate_events WHERE user_id = ? ORDER BY event_date, id",
+        (current_user_id(),),
+    )
+    return [dict(row) for row in rows]
+
+
 def save_manual_rows(table: str, rows: list[dict[str, str]]) -> None:
     uid = current_user_id()
     with core.db_connect() as conn:
@@ -656,6 +672,8 @@ def calculate_all() -> dict[int, core.CalculationResult]:
             trade.category = category_map[trade.code]
     positions = load_positions()
     events = load_events()
+    custody_transfers = load_custody_transfers()
+    corporate_events_list = load_corporate_events()
     losses_input = {
         "normal": abs(money(cfg.get("loss_normal"))),
         "daytrade": abs(money(cfg.get("loss_daytrade"))),
@@ -691,6 +709,8 @@ def calculate_all() -> dict[int, core.CalculationResult]:
             dated_losses,
             dated_loss_start,
             taxes,
+            custody_transfers=custody_transfers,
+            corporate_events=corporate_events_list,
         )
         results[year] = result
         current_positions = carry_positions(result)
@@ -1799,6 +1819,91 @@ def delete_manual(table: str, item_id: int) -> Response:
         conn.execute(f"DELETE FROM {sql_table} WHERE user_id = ? AND id = ?", (current_user_id(), item_id))
     flash("Registro excluido.", "success")
     return redirect(url_for("manual"))
+
+
+# ── Transferencias de Custodia ──────────────────────────────────────────────
+
+@app.route("/transferencias", methods=["GET", "POST"])
+@login_required
+def transferencias() -> str | Response:
+    uid = current_user_id()
+    if request.method == "POST":
+        action = request.form.get("action", "add")
+        if action == "delete":
+            item_id = int(request.form.get("item_id", 0))
+            with core.db_connect() as conn:
+                conn.execute("DELETE FROM custody_transfers WHERE id = ? AND user_id = ?", (item_id, uid))
+            flash("Transferencia excluida.", "success")
+        else:
+            with core.db_connect() as conn:
+                conn.execute(
+                    """INSERT INTO custody_transfers
+                       (user_id, transfer_date, protocol, broker_from, account_from, broker_to, account_to, ticker, asset_type, quantity, status, obs)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        uid,
+                        request.form.get("transfer_date", ""),
+                        request.form.get("protocol", ""),
+                        request.form.get("broker_from", ""),
+                        request.form.get("account_from", ""),
+                        request.form.get("broker_to", ""),
+                        request.form.get("account_to", ""),
+                        request.form.get("ticker", "").upper().strip(),
+                        request.form.get("asset_type", ""),
+                        request.form.get("quantity", "0"),
+                        request.form.get("status", "finalizado"),
+                        request.form.get("obs", ""),
+                    ),
+                )
+            flash("Transferencia registrada.", "success")
+        return redirect(url_for("transferencias"))
+    rows = db_rows(
+        "SELECT * FROM custody_transfers WHERE user_id = ? ORDER BY transfer_date DESC, id DESC",
+        (uid,),
+    )
+    return render_template("transferencias.html", rows=rows)
+
+
+# ── Eventos Corporativos ────────────────────────────────────────────────────
+
+@app.route("/eventos-corporativos", methods=["GET", "POST"])
+@login_required
+def eventos_corporativos() -> str | Response:
+    uid = current_user_id()
+    if request.method == "POST":
+        action = request.form.get("action", "add")
+        if action == "delete":
+            item_id = int(request.form.get("item_id", 0))
+            with core.db_connect() as conn:
+                conn.execute("DELETE FROM corporate_events WHERE id = ? AND user_id = ?", (item_id, uid))
+            flash("Evento excluido.", "success")
+        else:
+            with core.db_connect() as conn:
+                conn.execute(
+                    """INSERT INTO corporate_events
+                       (user_id, event_date, event_type, ticker, ticker_new, factor, bonus_qty, bonus_cost, broker_from, broker_to, obs)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        uid,
+                        request.form.get("event_date", ""),
+                        request.form.get("event_type", ""),
+                        request.form.get("ticker", "").upper().strip(),
+                        request.form.get("ticker_new", "").upper().strip(),
+                        request.form.get("factor", "1"),
+                        request.form.get("bonus_qty", "0"),
+                        request.form.get("bonus_cost", "0"),
+                        request.form.get("broker_from", ""),
+                        request.form.get("broker_to", ""),
+                        request.form.get("obs", ""),
+                    ),
+                )
+            flash("Evento corporativo registrado.", "success")
+        return redirect(url_for("eventos_corporativos"))
+    rows = db_rows(
+        "SELECT * FROM corporate_events WHERE user_id = ? ORDER BY event_date DESC, id DESC",
+        (uid,),
+    )
+    return render_template("eventos_corporativos.html", rows=rows)
 
 
 @app.route("/cnpjs")
