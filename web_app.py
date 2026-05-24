@@ -1608,14 +1608,17 @@ def dashboard() -> str:
 def inicio() -> str:
     try:
         results = calculate_all()
-    except Exception:
+    except Exception as exc:
+        app.logger.error("Erro em calculate_all: %s", exc, exc_info=True)
         results = {}
     year = int(request.args.get("year") or (selected_year(results) if results else date.today().year))
     if year not in results:
         year = max(results) if results else date.today().year
     result = results.get(year)
     calc_rows = monthly_rows(result) if result else []
-    summary = result_summary(result) if result else {}
+    _zero = Decimal("0")
+    _empty_summary = {"normal": _zero, "daytrade": _zero, "fii": _zero, "opcoes": _zero, "futuro": _zero, "imposto": _zero}
+    summary = result_summary(result) if result else _empty_summary
     positions = list(result.positions.values()) if result else []
     acoes = sorted(
         [p for p in positions if p.qty > 0 and p.category not in {"fii", "opcoes", "futuro"}],
