@@ -1372,25 +1372,54 @@ class IRSimpleEngine:
         year: int,
         warnings: list[str],
     ) -> None:
-        """Aplica transferencias de custodia (portabilidade B3) nas posicoes."""
+        """Aplica transferencias de custodia (portabilidade B3) nas posicoes.
+
+        Quando a quantidade transferida e menor que a posicao total, considera
+        que o saldo remanescente foi adquirido diretamente na corretora destino
+        (compras posteriores) — logo a posicao inteira e marcada como broker_to,
+        pois o PM ja e calculado de forma consolidada pelo engine.
+        """
+        # agrupa por codigo para aplicar multiplas transferencias em ordem cronologica
+        from collections import defaultdict as _dd
+        by_code: dict[str, list[dict]] = _dd(list)
         for t in transfers:
             dt = parse_date(t.get("transfer_date"))
             if dt is None or dt.year > year:
                 continue
             code = normalize_ticker(t.get("ticker", ""))
-            if not code:
-                continue
-            qty = money(t.get("quantity", "0"))
-            broker_to = str(t.get("broker_to") or "")
-            if code in positions:
-                pos = positions[code]
-                if broker_to:
+            if code:
+                by_code[code].append(t)
+
+        for code, tlist in by_code.items():
+            # ordena por data para aplicar na sequencia correta
+            tlist.sort(key=lambda x: parse_date(x.get("transfer_date")) or date.min)
+            for t in tlist:
+                dt = parse_date(t.get("transfer_date"))
+                qty_transferred = money(t.get("quantity", "0"))
+                broker_to = str(t.get("broker_to") or "")
+                if not broker_to:
+                    continue
+                if code in positions:
+                    pos = positions[code]
+                    pos_qty = pos.qty
+                    # migra o broker independente da quantidade —
+                    # transferencias parciais sao esperadas quando ha compras
+                    # posteriores na corretora destino que nao geram nova transferencia
+                    old_broker = pos.broker or "?"
                     pos.broker = broker_to
-            else:
-                warnings.append(
-                    f"Transferencia de custodia: ativo {code} em {dt:%d/%m/%Y} nao encontrado nas posicoes. "
-                    f"Corretora destino: {broker_to}. Verifique se o ativo foi importado corretamente."
-                )
+                    if qty_transferred > 0 and qty_transferred < pos_qty:
+                        warnings.append(
+                            f"Transferencia parcial de {code} em {dt:%d/%m/%Y}: "
+                            f"{fmt_decimal(qty_transferred)} de {fmt_decimal(pos_qty)} acoes transferidas de "
+                            f"'{old_broker}' para '{broker_to}'. "
+                            f"O restante ({fmt_decimal(pos_qty - qty_transferred)}) foi adquirido diretamente na corretora destino. "
+                            f"Posicao consolidada em '{broker_to}'."
+                        )
+                else:
+                    warnings.append(
+                        f"Transferencia de custodia: ativo {code} em {dt:%d/%m/%Y} nao encontrado nas posicoes. "
+                        f"Corretora destino: {broker_to}. Verifique se o ativo foi importado corretamente."
+                    )
 
     def _apply_corporate_events(
         self,
