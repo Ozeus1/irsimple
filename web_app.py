@@ -390,6 +390,7 @@ def load_events() -> list[dict[str, Any]]:
 
 
 def load_custody_transfers() -> list[dict[str, Any]]:
+    core.init_db()
     rows = db_rows(
         "SELECT * FROM custody_transfers WHERE user_id = ? ORDER BY transfer_date, id",
         (current_user_id(),),
@@ -398,6 +399,7 @@ def load_custody_transfers() -> list[dict[str, Any]]:
 
 
 def load_corporate_events() -> list[dict[str, Any]]:
+    core.init_db()
     rows = db_rows(
         "SELECT * FROM corporate_events WHERE user_id = ? ORDER BY event_date, id",
         (current_user_id(),),
@@ -1829,6 +1831,7 @@ def delete_manual(table: str, item_id: int) -> Response:
 @app.route("/transferencias", methods=["GET", "POST"])
 @login_required
 def transferencias() -> str | Response:
+    core.init_db()
     uid = current_user_id()
     if request.method == "POST":
         action = request.form.get("action", "add")
@@ -1872,6 +1875,7 @@ def transferencias() -> str | Response:
 @app.route("/eventos-corporativos", methods=["GET", "POST"])
 @login_required
 def eventos_corporativos() -> str | Response:
+    core.init_db()
     uid = current_user_id()
     if request.method == "POST":
         action = request.form.get("action", "add")
