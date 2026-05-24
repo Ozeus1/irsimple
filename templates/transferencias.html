@@ -80,17 +80,32 @@
 </div>
 
 <div class="card shadow-sm">
-  <div class="card-header fw-semibold">
-    <i class="bi bi-arrow-left-right me-1"></i> Transferencias registradas ({{ rows | length }})
+  <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-arrow-left-right me-1"></i> Transferencias registradas (<span id="visibleCount">{{ rows | length }}</span> de {{ rows | length }})</span>
+    <button class="btn btn-sm btn-outline-secondary" onclick="clearFilters('tblTransf')" title="Limpar filtros"><i class="bi bi-x-circle me-1"></i>Limpar filtros</button>
   </div>
   <div class="card-body p-0">
     <div class="table-responsive">
-      <table class="table table-sm table-hover mb-0">
+      <table class="table table-sm table-hover mb-0" id="tblTransf">
         <thead class="table-light">
           <tr>
             <th>Data</th><th>Protocolo</th><th>Origem</th><th>Conta orig.</th>
             <th>Destino</th><th>Conta dest.</th><th>Ticker</th><th>Tipo</th>
             <th class="text-end">Qtd</th><th>Status</th><th>Obs</th><th></th>
+          </tr>
+          <tr class="filter-row">
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="0"></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="1"></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="2"></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="3"></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="4"></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="5"></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="6"></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="7"></th>
+            <th></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="9"></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="10"></th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -264,6 +279,42 @@
 </div>
 
 <script>
+// ── filtro por coluna ──────────────────────────────────────────────────────
+function initTableFilter(tableId, counterId) {
+  var tbl = document.getElementById(tableId);
+  if (!tbl) return;
+  var inputs = tbl.querySelectorAll('.col-filter');
+  var counter = counterId ? document.getElementById(counterId) : null;
+  function applyFilters() {
+    var filters = Array.from(inputs).map(function(inp) {
+      return { col: parseInt(inp.dataset.col), val: inp.value.trim().toLowerCase() };
+    }).filter(function(f) { return f.val !== ''; });
+    var rows = tbl.tBodies[0].rows;
+    var visible = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var show = filters.every(function(f) {
+        var cell = rows[i].cells[f.col];
+        return cell && cell.textContent.toLowerCase().includes(f.val);
+      });
+      rows[i].style.display = show ? '' : 'none';
+      if (show) visible++;
+    }
+    if (counter) counter.textContent = visible;
+  }
+  inputs.forEach(function(inp) { inp.addEventListener('input', applyFilters); });
+}
+function clearFilters(tableId) {
+  var tbl = document.getElementById(tableId);
+  if (!tbl) return;
+  tbl.querySelectorAll('.col-filter').forEach(function(inp) { inp.value = ''; });
+  Array.from(tbl.tBodies[0].rows).forEach(function(r) { r.style.display = ''; });
+  var counter = document.getElementById('visibleCount');
+  if (counter) counter.textContent = tbl.tBodies[0].rows.length;
+}
+document.addEventListener('DOMContentLoaded', function() {
+  initTableFilter('tblTransf', 'visibleCount');
+});
+
 // gera link de download do modelo CSV com a ordem correta de colunas
 (function() {
   var header = "Data,Protocolo,Corretora Origem,Conta Origem,Corretora Destino,Conta Destino,Ticker,Quantidade,Tipo de Ativo,Status,Observacao";

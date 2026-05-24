@@ -18,21 +18,31 @@
 </div>
 
 <div class="card shadow-sm">
+  <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+    <span><span id="visibleCount">{{ total }}</span> de {{ total }} registros</span>
+    <button class="btn btn-sm btn-outline-secondary" onclick="clearFilters('tblMov', 'visibleCount', {{ total }})">
+      <i class="bi bi-x-circle me-1"></i>Limpar filtros
+    </button>
+  </div>
   <div class="card-body p-0">
     <div class="table-responsive">
-      <table class="table table-sm table-hover mb-0">
+      <table class="table table-sm table-hover mb-0" id="tblMov">
         <thead class="table-light">
           <tr>
-            <th>Data</th>
-            <th>Tipo</th>
-            <th>Produto</th>
-            <th>Ticker</th>
-            <th>Categoria</th>
-            <th>Entrada/Saida</th>
-            <th class="text-end">Qtd</th>
-            <th class="text-end">Preco unit.</th>
-            <th class="text-end">Valor</th>
-            <th>Corretora</th>
+            <th>Data</th><th>Tipo</th><th>Produto</th><th>Ticker</th>
+            <th>Categoria</th><th>Entrada/Saida</th>
+            <th class="text-end">Qtd</th><th class="text-end">Preco unit.</th>
+            <th class="text-end">Valor</th><th>Corretora</th>
+          </tr>
+          <tr class="filter-row">
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="0"></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="1"></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="2"></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="3"></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="4"></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="5"></th>
+            <th></th><th></th><th></th>
+            <th><input type="text" class="col-filter form-control form-control-sm" placeholder="filtrar..." data-col="9"></th>
           </tr>
         </thead>
         <tbody>
@@ -63,4 +73,38 @@
     </div>
   </div>
 </div>
+
+<script>
+function initTableFilter(tableId, counterId) {
+  var tbl = document.getElementById(tableId);
+  if (!tbl) return;
+  var inputs = tbl.querySelectorAll('.col-filter');
+  var counter = counterId ? document.getElementById(counterId) : null;
+  function applyFilters() {
+    var filters = Array.from(inputs).map(function(inp) {
+      return { col: parseInt(inp.dataset.col), val: inp.value.trim().toLowerCase() };
+    }).filter(function(f) { return f.val !== ''; });
+    var rows = tbl.tBodies[0].rows;
+    var visible = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var show = filters.every(function(f) {
+        var cell = rows[i].cells[f.col];
+        return cell && cell.textContent.toLowerCase().includes(f.val);
+      });
+      rows[i].style.display = show ? '' : 'none';
+      if (show) visible++;
+    }
+    if (counter) counter.textContent = visible;
+  }
+  inputs.forEach(function(inp) { inp.addEventListener('input', applyFilters); });
+}
+function clearFilters(tableId, counterId, total) {
+  var tbl = document.getElementById(tableId);
+  if (!tbl) return;
+  tbl.querySelectorAll('.col-filter').forEach(function(inp) { inp.value = ''; });
+  Array.from(tbl.tBodies[0].rows).forEach(function(r) { r.style.display = ''; });
+  if (counterId) document.getElementById(counterId).textContent = total;
+}
+document.addEventListener('DOMContentLoaded', function() { initTableFilter('tblMov', 'visibleCount'); });
+</script>
 {% endblock %}
