@@ -1138,16 +1138,19 @@ class IRSimpleEngine:
 
         if corporate_events:
             self._apply_corporate_events(positions, corporate_events, self.year, warnings)
-        if custody_transfers:
-            self._apply_custody_transfers(positions, custody_transfers, self.year, warnings)
         self._apply_events_before_trades(positions, events, warnings)
         trades_after_daytrade = self._split_daytrades(year_trades, monthly)
         normal_trades = [trade for trade in trades_after_daytrade if trade.category != "opcoes"]
         option_trades_for_year = [trade for trade in trades_after_daytrade if trade.category == "opcoes"]
         trades_for_options = [trade for trade in trades if trade.dt.year != self.year] + option_trades_for_year
+        # atualiza broker pela ultima compra do ano (antes de aplicar transferencias de custodia)
+        self._update_broker_from_trades(positions, year_trades)
         monthly_positions = self._process_normal_trades(normal_trades, positions, monthly, warnings, events)
         pending_options = self._process_option_trades(trades_for_options, monthly, warnings, events, cutoff)
         pending_options.extend(self._process_option_exercises(trades_for_options, positions, monthly_positions, monthly, warnings, cutoff, events))
+        # transferencias de custodia aplicadas por ultimo — tem prioridade sobre trades
+        if custody_transfers:
+            self._apply_custody_transfers(positions, custody_transfers, self.year, warnings)
         self._apply_income_movements(movements, monthly)
 
         self._apply_monthly_tax(monthly, initial_losses, dated_losses or {}, dated_loss_start)
@@ -1364,6 +1367,25 @@ class IRSimpleEngine:
             elif "exercicio" in kind:
                 pos.qty += qty
                 pos.cost = q2(pos.cost + value)
+
+    def _update_broker_from_trades(
+        self,
+        positions: dict[str, Position],
+        year_trades: list[Trade],
+    ) -> None:
+        """Atualiza o broker de cada posicao para a corretora da ultima compra do ano.
+
+        Isso garante que compras feitas diretamente em uma nova corretora (sem
+        transferencia de custodia registrada) reflitam a corretora correta na carteira.
+        As transferencias de custodia sao aplicadas depois e tem prioridade sobre isso.
+        """
+        last_buy: dict[str, Trade] = {}
+        for trade in sorted(year_trades, key=lambda t: (t.dt, t.code)):
+            if trade.side == "compra" and trade.broker:
+                last_buy[trade.code] = trade
+        for code, trade in last_buy.items():
+            if code in positions and positions[code].qty > 0:
+                positions[code].broker = trade.broker
 
     def _apply_custody_transfers(
         self,
