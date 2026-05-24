@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="mb-0">Movimentacoes</h1>
+    <p class="text-muted mb-0">{{ total }} proventos, transferencias e eventos.</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('movimentacoes', order='desc') }}"
+       class="btn btn-sm {{ 'btn-primary' if order == 'desc' else 'btn-outline-secondary' }}">
+      <i class="bi bi-sort-down me-1"></i>Mais recentes
+    </a>
+    <a href="{{ url_for('movimentacoes', order='asc') }}"
+       class="btn btn-sm {{ 'btn-primary' if order == 'asc' else 'btn-outline-secondary' }}">
+      <i class="bi bi-sort-up me-1"></i>Mais antigas
+    </a>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Data</th>
+            <th>Tipo</th>
+            <th>Produto</th>
+            <th>Ticker</th>
+            <th>Categoria</th>
+            <th>Entrada/Saida</th>
+            <th class="text-end">Qtd</th>
+            <th class="text-end">Preco unit.</th>
+            <th class="text-end">Valor</th>
+            <th>Corretora</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td class="text-nowrap">{{ r.dt }}</td>
+            <td class="small">{{ r.kind or '-' }}</td>
+            <td class="text-muted small">{{ r.product or '-' }}</td>
+            <td class="fw-semibold">{{ r.code or '-' }}</td>
+            <td class="text-muted small">{{ r.category or '-' }}</td>
+            <td>
+              {% if r.direction %}
+              <span class="badge {{ 'bg-success' if r.direction|lower in ('credito','entrada','c') else 'bg-secondary' }}">
+                {{ r.direction }}
+              </span>
+              {% else %}-{% endif %}
+            </td>
+            <td class="text-end">{{ r.qty if r.qty else '-' }}</td>
+            <td class="text-end">{{ r.unit_price | fmt if r.unit_price else '-' }}</td>
+            <td class="text-end">{{ r.value | fmt if r.value else '-' }}</td>
+            <td class="small">{{ r.broker or '-' }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="10" class="text-center text-muted py-4">Nenhuma movimentacao importada.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

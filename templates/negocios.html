@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="mb-0">Negocios importados</h1>
+    <p class="text-muted mb-0">{{ total }} operacoes B3 usadas no calculo.</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('negocios', order='desc') }}"
+       class="btn btn-sm {{ 'btn-primary' if order == 'desc' else 'btn-outline-secondary' }}">
+      <i class="bi bi-sort-down me-1"></i>Mais recentes
+    </a>
+    <a href="{{ url_for('negocios', order='asc') }}"
+       class="btn btn-sm {{ 'btn-primary' if order == 'asc' else 'btn-outline-secondary' }}">
+      <i class="bi bi-sort-up me-1"></i>Mais antigas
+    </a>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Data</th>
+            <th>Lado</th>
+            <th>Mercado</th>
+            <th>Ticker</th>
+            <th>Categoria</th>
+            <th class="text-end">Qtd</th>
+            <th class="text-end">Preco</th>
+            <th class="text-end">Valor</th>
+            <th>Corretora</th>
+            <th>Vencimento</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td class="text-nowrap">{{ r.dt }}</td>
+            <td>
+              <span class="badge {{ 'bg-success' if r.side == 'C' else 'bg-danger' }}">
+                {{ 'Compra' if r.side == 'C' else 'Venda' }}
+              </span>
+            </td>
+            <td class="text-muted small">{{ r.market or '-' }}</td>
+            <td class="fw-semibold">{{ r.code }}</td>
+            <td class="text-muted small">{{ r.category or '-' }}</td>
+            <td class="text-end">{{ r.qty }}</td>
+            <td class="text-end">{{ r.price | fmt if r.price else '-' }}</td>
+            <td class="text-end">{{ r.value | fmt if r.value else '-' }}</td>
+            <td class="small">{{ r.broker or '-' }}</td>
+            <td class="text-muted small">{{ r.expiry or '-' }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="10" class="text-center text-muted py-4">Nenhum negocio importado.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

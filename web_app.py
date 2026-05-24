@@ -1605,6 +1605,32 @@ def dashboard() -> str:
     )
 
 
+@app.route("/negocios")
+@login_required
+def negocios() -> str:
+    uid = current_user_id()
+    order = request.args.get("order", "desc")
+    sql_order = "ASC" if order == "asc" else "DESC"
+    rows = db_rows(
+        f"SELECT * FROM trades WHERE user_id = ? ORDER BY dt {sql_order}, id {sql_order}",
+        (uid,),
+    )
+    return render_template("negocios.html", rows=rows, order=order, total=len(rows))
+
+
+@app.route("/movimentacoes")
+@login_required
+def movimentacoes() -> str:
+    uid = current_user_id()
+    order = request.args.get("order", "desc")
+    sql_order = "ASC" if order == "asc" else "DESC"
+    rows = db_rows(
+        f"SELECT * FROM movements WHERE user_id = ? ORDER BY dt {sql_order}, id {sql_order}",
+        (uid,),
+    )
+    return render_template("movimentacoes.html", rows=rows, order=order, total=len(rows))
+
+
 @app.route("/inicio")
 @login_required
 def inicio() -> str:
@@ -1848,7 +1874,7 @@ def transferencias() -> str | Response:
                 return "".join(c for c in s if unicodedata.category(c) != "Mn").replace(" ", "_").replace("/", "_")
             inserted = updated = skipped = 0
             with core.db_connect() as conn:
-                for i, row in enumerate(reader, start=2):
+                for row in reader:
                     nrow = {_norm(k): v.strip() for k, v in row.items() if k}
                     ticker = nrow.get("ticker", "").upper().strip()
                     date_val = nrow.get("data", "")
