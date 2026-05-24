@@ -1289,11 +1289,44 @@ def download_nota(note_id: int) -> Response:
     return send_file(path, as_attachment=True, download_name=path.name, mimetype="application/pdf")
 
 
+@app.route("/notas/edit", methods=["POST"])
+@login_required
+def edit_nota() -> Response:
+    note_id = int(request.form.get("note_id") or 0)
+    uid = current_user_id()
+    with core.db_connect() as conn:
+        conn.execute(
+            "UPDATE brokerage_note_taxes SET trade_date=?, note_number=?, irrf_common=?, irrf_daytrade=?, irrf_fii=?, irrf_base=? WHERE id=? AND user_id=?",
+            (
+                request.form.get("trade_date", ""),
+                request.form.get("note_number", ""),
+                request.form.get("irrf_common", "0"),
+                request.form.get("irrf_daytrade", "0"),
+                request.form.get("irrf_fii", "0"),
+                request.form.get("irrf_base", "0"),
+                note_id,
+                uid,
+            ),
+        )
+    flash("Nota atualizada.", "success")
+    return redirect(url_for("notas"))
+
+
+@app.route("/notas/<int:note_id>/delete", methods=["POST"])
+@login_required
+def delete_nota(note_id: int) -> Response:
+    with core.db_connect() as conn:
+        conn.execute("DELETE FROM brokerage_note_taxes WHERE id = ? AND user_id = ?", (note_id, current_user_id()))
+    flash("Nota excluida.", "success")
+    return redirect(url_for("notas"))
+
+
 @app.route("/manual", methods=["GET", "POST"])
 @login_required
 def manual() -> str | Response:
     if request.method == "POST":
         kind = request.form.get("kind")
+        uid = current_user_id()
         if kind == "position":
             row = {
                 "ativo": request.form.get("ativo", ""),
@@ -1302,9 +1335,17 @@ def manual() -> str | Response:
                 "categoria": request.form.get("categoria", ""),
                 "corretora": request.form.get("corretora", ""),
             }
-            rows = [dict(r) for r in db_rows("SELECT ativo, quantidade, custo, categoria, corretora FROM manual_positions WHERE user_id = ? ORDER BY id", (current_user_id(),))]
+            rows = [dict(r) for r in db_rows("SELECT ativo, quantidade, custo, categoria, corretora FROM manual_positions WHERE user_id = ? ORDER BY id", (uid,))]
             rows.append(row)
             save_manual_rows("positions", rows)
+        elif kind == "position_edit":
+            item_id = int(request.form.get("edit_id") or 0)
+            with core.db_connect() as conn:
+                conn.execute(
+                    "UPDATE manual_positions SET ativo=?, quantidade=?, custo=?, categoria=?, corretora=? WHERE id=? AND user_id=?",
+                    (request.form.get("ativo", ""), request.form.get("quantidade", ""), request.form.get("custo", ""),
+                     request.form.get("categoria", ""), request.form.get("corretora", ""), item_id, uid),
+                )
         elif kind == "event":
             row = {
                 "data": request.form.get("data", ""),
@@ -1315,9 +1356,18 @@ def manual() -> str | Response:
                 "categoria": request.form.get("categoria", ""),
                 "observacao": request.form.get("observacao", ""),
             }
-            rows = [dict(r) for r in db_rows("SELECT data, tipo, ativo, quantidade, valor, categoria, observacao FROM manual_events WHERE user_id = ? ORDER BY id", (current_user_id(),))]
+            rows = [dict(r) for r in db_rows("SELECT data, tipo, ativo, quantidade, valor, categoria, observacao FROM manual_events WHERE user_id = ? ORDER BY id", (uid,))]
             rows.append(row)
             save_manual_rows("events", rows)
+        elif kind == "event_edit":
+            item_id = int(request.form.get("edit_id") or 0)
+            with core.db_connect() as conn:
+                conn.execute(
+                    "UPDATE manual_events SET data=?, tipo=?, ativo=?, quantidade=?, valor=?, categoria=?, observacao=? WHERE id=? AND user_id=?",
+                    (request.form.get("data", ""), request.form.get("tipo", ""), request.form.get("ativo", ""),
+                     request.form.get("quantidade", ""), request.form.get("valor", ""), request.form.get("categoria", ""),
+                     request.form.get("observacao", ""), item_id, uid),
+                )
         flash("Registro manual salvo.", "success")
         return redirect(url_for("manual"))
     positions = db_rows("SELECT id, ativo, quantidade, custo, categoria, corretora FROM manual_positions WHERE user_id = ? ORDER BY id", (current_user_id(),))
@@ -1333,6 +1383,70 @@ def delete_manual(table: str, item_id: int) -> Response:
         conn.execute(f"DELETE FROM {sql_table} WHERE user_id = ? AND id = ?", (current_user_id(), item_id))
     flash("Registro excluido.", "success")
     return redirect(url_for("manual"))
+
+
+@app.route("/cnpjs")
+@login_required
+def cnpjs() -> str:
+    rows = db_rows(
+        "SELECT id, ticker, cnpj, nome, tipo, fonte FROM asset_cnpjs WHERE user_id = ? ORDER BY ticker",
+        (current_user_id(),),
+    )
+    return render_template("cnpjs.html", rows=rows)
+
+
+@app.route("/cnpjs/update-online", methods=["POST"])
+@login_required
+def update_cnpjs_online() -> Response:
+    uid = current_user_id()
+    try:
+        rows = core.parse_asset_cnpj_sources()
+        with core.db_connect() as conn:
+            conn.execute("DELETE FROM asset_cnpjs WHERE user_id = ?", (uid,))
+            conn.executemany(
+                "INSERT INTO asset_cnpjs (user_id, ticker, cnpj, nome, tipo, fonte, updated_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                [(uid, r["ticker"], r["cnpj"], r["nome"], r["tipo"], r["fonte"]) for r in rows],
+            )
+        flash(f"CNPJs atualizados: {len(rows)} ativos importados.", "success")
+    except Exception as exc:
+        flash(f"Erro ao atualizar CNPJs: {exc}", "danger")
+    return redirect(url_for("cnpjs"))
+
+
+@app.route("/cnpjs/edit", methods=["POST"])
+@login_required
+def edit_cnpj() -> Response:
+    cnpj_id = request.form.get("cnpj_id", "").strip()
+    uid = current_user_id()
+    ticker = core.normalize_ticker(request.form.get("ticker", ""))
+    cnpj = request.form.get("cnpj", "").strip()
+    nome = request.form.get("nome", "").strip()
+    tipo = request.form.get("tipo", "outro").strip()
+    if not ticker:
+        flash("Ticker invalido.", "warning")
+        return redirect(url_for("cnpjs"))
+    with core.db_connect() as conn:
+        if cnpj_id:
+            conn.execute(
+                "UPDATE asset_cnpjs SET ticker=?, cnpj=?, nome=?, tipo=?, fonte='manual', updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
+                (ticker, cnpj, nome, tipo, int(cnpj_id), uid),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO asset_cnpjs (user_id, ticker, cnpj, nome, tipo, fonte, updated_at) VALUES (?, ?, ?, ?, ?, 'manual', CURRENT_TIMESTAMP)",
+                (uid, ticker, cnpj, nome, tipo),
+            )
+    flash("CNPJ salvo.", "success")
+    return redirect(url_for("cnpjs"))
+
+
+@app.route("/cnpjs/<int:cnpj_id>/delete", methods=["POST"])
+@login_required
+def delete_cnpj(cnpj_id: int) -> Response:
+    with core.db_connect() as conn:
+        conn.execute("DELETE FROM asset_cnpjs WHERE id = ? AND user_id = ?", (cnpj_id, current_user_id()))
+    flash("CNPJ excluido.", "success")
+    return redirect(url_for("cnpjs"))
 
 
 @app.route("/calculo")

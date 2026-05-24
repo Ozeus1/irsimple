@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>CNPJs dos ativos</h1>
+
+{# ── Modal de edição ── #}
+<div id="editModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:10px;padding:24px;min-width:340px;max-width:520px;width:94%;box-shadow:0 12px 40px rgba(0,0,0,.2);">
+    <h2 style="margin:0 0 16px;font-size:17px;" id="modalTitle">Editar CNPJ</h2>
+    <form id="editForm" method="post" action="{{ url_for('edit_cnpj') }}">
+      <input type="hidden" name="cnpj_id" id="editId">
+      <div class="grid-form cols-2" style="gap:10px;">
+        <label>Ticker <input name="ticker" id="editTicker"></label>
+        <label>CNPJ <input name="cnpj" id="editCnpj" placeholder="00.000.000/0000-00"></label>
+        <label>Nome <input name="nome" id="editNome"></label>
+        <label>Tipo
+          <select name="tipo" id="editTipo">
+            <option value="acao">acao</option>
+            <option value="fii">fii</option>
+            <option value="etf">etf</option>
+            <option value="outro">outro</option>
+          </select>
+        </label>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+        <button type="button" onclick="closeModal()" style="padding:8px 16px;">Cancelar</button>
+        <button type="submit" class="primary" style="padding:8px 16px;">Salvar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="toolbar">
+    <form method="post" action="{{ url_for('update_cnpjs_online') }}">
+      <button class="primary">Atualizar CNPJs online</button>
+    </form>
+    <button onclick="addNew()" style="padding:8px 14px;">Adicionar manualmente</button>
+  </div>
+  <p class="hint">Total: {{ rows|length }} ativos. Usado no relatorio anual para preenchimento do CNPJ.</p>
+</section>
+
+<section class="panel">
+  <table>
+    <thead>
+      <tr><th>Ticker</th><th>CNPJ</th><th>Nome</th><th>Tipo</th><th>Fonte</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.ticker }}</td>
+        <td>{{ r.cnpj }}</td>
+        <td>{{ r.nome }}</td>
+        <td>{{ r.tipo }}</td>
+        <td class="muted">{{ r.fonte }}</td>
+        <td style="white-space:nowrap;">
+          <button class="link" onclick="editCnpj({{ r.id }}, {{ r.ticker|tojson }}, {{ r.cnpj|tojson }}, {{ r.nome|tojson }}, {{ r.tipo|tojson }})">Editar</button>
+          &nbsp;
+          <form method="post" action="{{ url_for('delete_cnpj', cnpj_id=r.id) }}" style="display:inline;">
+            <button class="link" style="color:var(--red);">Excluir</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<script>
+function closeModal() { document.getElementById("editModal").style.display = "none"; }
+document.getElementById("editModal").addEventListener("click", function(e) { if (e.target === this) closeModal(); });
+function editCnpj(id, ticker, cnpj, nome, tipo) {
+  document.getElementById("modalTitle").textContent = "Editar CNPJ";
+  document.getElementById("editId").value = id;
+  document.getElementById("editTicker").value = ticker || "";
+  document.getElementById("editCnpj").value = cnpj || "";
+  document.getElementById("editNome").value = nome || "";
+  document.getElementById("editTipo").value = tipo || "acao";
+  document.getElementById("editModal").style.display = "flex";
+}
+function addNew() {
+  document.getElementById("modalTitle").textContent = "Adicionar CNPJ";
+  document.getElementById("editId").value = "";
+  document.getElementById("editTicker").value = "";
+  document.getElementById("editCnpj").value = "";
+  document.getElementById("editNome").value = "";
+  document.getElementById("editTipo").value = "acao";
+  document.getElementById("editModal").style.display = "flex";
+}
+</script>
+{% endblock %}

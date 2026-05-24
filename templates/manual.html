@@ -1,14 +1,140 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Dados manuais</h1>
+
+{# ── Modal de edição ── #}
+<div id="editModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:10px;padding:24px;min-width:340px;max-width:680px;width:94%;box-shadow:0 12px 40px rgba(0,0,0,.2);">
+    <h2 id="modalTitle" style="margin:0 0 16px;font-size:17px;"></h2>
+    <form id="editForm" method="post">
+      <input type="hidden" name="kind" id="editKind">
+      <input type="hidden" name="edit_id" id="editId">
+      <div id="editFields" class="grid-form" style="gap:10px;"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+        <button type="button" onclick="closeModal()" style="padding:8px 16px;">Cancelar</button>
+        <button type="submit" class="primary" style="padding:8px 16px;">Salvar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <section class="panel">
   <h2>Posicao inicial</h2>
-  <form method="post" class="grid-form cols-5"><input type="hidden" name="kind" value="position"><label>Ativo <input name="ativo"></label><label>Quantidade <input name="quantidade"></label><label>Custo <input name="custo"></label><label>Categoria <input name="categoria"></label><label>Corretora <input name="corretora"></label><button>Adicionar</button></form>
-  <table><tbody>{% for r in positions %}<tr><td>{{ r.ativo }}</td><td>{{ r.quantidade }}</td><td>{{ r.custo }}</td><td>{{ r.categoria }}</td><td>{{ r.corretora }}</td><td><form method="post" action="{{ url_for('delete_manual', table='positions', item_id=r.id) }}"><button class="link">Excluir</button></form></td></tr>{% endfor %}</tbody></table>
+  <form method="post" class="grid-form cols-5">
+    <input type="hidden" name="kind" value="position">
+    <label>Ativo <input name="ativo"></label>
+    <label>Quantidade <input name="quantidade"></label>
+    <label>Custo <input name="custo"></label>
+    <label>Categoria <input name="categoria"></label>
+    <label>Corretora <input name="corretora"></label>
+    <button>Adicionar</button>
+  </form>
+  <table style="margin-top:12px;">
+    <thead><tr><th>Ativo</th><th>Qtd</th><th>Custo</th><th>Categoria</th><th>Corretora</th><th></th></tr></thead>
+    <tbody>
+    {% for r in positions %}
+    <tr>
+      <td>{{ r.ativo }}</td>
+      <td>{{ r.quantidade }}</td>
+      <td>{{ r.custo }}</td>
+      <td>{{ r.categoria }}</td>
+      <td>{{ r.corretora }}</td>
+      <td style="white-space:nowrap;">
+        <button class="link" onclick="editPosition({{ r.id }}, {{ r.ativo|tojson }}, {{ r.quantidade|tojson }}, {{ r.custo|tojson }}, {{ r.categoria|tojson }}, {{ r.corretora|tojson }})">Editar</button>
+        &nbsp;
+        <form method="post" action="{{ url_for('delete_manual', table='positions', item_id=r.id) }}" style="display:inline;">
+          <button class="link" style="color:var(--red);">Excluir</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
 </section>
+
 <section class="panel">
   <h2>Eventos manuais</h2>
-  <form method="post" class="grid-form cols-4"><input type="hidden" name="kind" value="event"><label>Data <input name="data"></label><label>Tipo <input name="tipo"></label><label>Ativo <input name="ativo"></label><label>Quantidade <input name="quantidade"></label><label>Valor <input name="valor"></label><label>Categoria <input name="categoria"></label><label class="wide">Observacao <input name="observacao"></label><button>Adicionar</button></form>
-  <table><tbody>{% for r in events %}<tr><td>{{ r.data }}</td><td>{{ r.tipo }}</td><td>{{ r.ativo }}</td><td>{{ r.quantidade }}</td><td>{{ r.valor }}</td><td>{{ r.categoria }}</td><td>{{ r.observacao }}</td><td><form method="post" action="{{ url_for('delete_manual', table='events', item_id=r.id) }}"><button class="link">Excluir</button></form></td></tr>{% endfor %}</tbody></table>
+  <form method="post" class="grid-form cols-4">
+    <input type="hidden" name="kind" value="event">
+    <label>Data <input name="data" type="date"></label>
+    <label>Tipo <input name="tipo"></label>
+    <label>Ativo <input name="ativo"></label>
+    <label>Quantidade <input name="quantidade"></label>
+    <label>Valor <input name="valor"></label>
+    <label>Categoria <input name="categoria"></label>
+    <label class="wide">Observacao <input name="observacao"></label>
+    <button>Adicionar</button>
+  </form>
+  <table style="margin-top:12px;">
+    <thead><tr><th>Data</th><th>Tipo</th><th>Ativo</th><th>Qtd</th><th>Valor</th><th>Categoria</th><th>Observacao</th><th></th></tr></thead>
+    <tbody>
+    {% for r in events %}
+    <tr>
+      <td>{{ r.data }}</td>
+      <td>{{ r.tipo }}</td>
+      <td>{{ r.ativo }}</td>
+      <td>{{ r.quantidade }}</td>
+      <td>{{ r.valor }}</td>
+      <td>{{ r.categoria }}</td>
+      <td>{{ r.observacao }}</td>
+      <td style="white-space:nowrap;">
+        <button class="link" onclick="editEvent({{ r.id }}, {{ r.data|tojson }}, {{ r.tipo|tojson }}, {{ r.ativo|tojson }}, {{ r.quantidade|tojson }}, {{ r.valor|tojson }}, {{ r.categoria|tojson }}, {{ r.observacao|tojson }})">Editar</button>
+        &nbsp;
+        <form method="post" action="{{ url_for('delete_manual', table='events', item_id=r.id) }}" style="display:inline;">
+          <button class="link" style="color:var(--red);">Excluir</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
 </section>
+
+<script>
+function openModal(title, kind, id, fields) {
+  document.getElementById("modalTitle").textContent = title;
+  document.getElementById("editKind").value = kind;
+  document.getElementById("editId").value = id;
+  var container = document.getElementById("editFields");
+  container.innerHTML = "";
+  fields.forEach(function(f) {
+    var label = document.createElement("label");
+    label.textContent = f.label + " ";
+    var input = document.createElement("input");
+    input.name = f.name;
+    input.value = f.value || "";
+    if (f.type) input.type = f.type;
+    label.appendChild(input);
+    container.appendChild(label);
+  });
+  var modal = document.getElementById("editModal");
+  modal.style.display = "flex";
+}
+function closeModal() {
+  document.getElementById("editModal").style.display = "none";
+}
+document.getElementById("editModal").addEventListener("click", function(e) {
+  if (e.target === this) closeModal();
+});
+function editPosition(id, ativo, quantidade, custo, categoria, corretora) {
+  openModal("Editar posicao inicial", "position_edit", id, [
+    {label:"Ativo", name:"ativo", value:ativo},
+    {label:"Quantidade", name:"quantidade", value:quantidade},
+    {label:"Custo", name:"custo", value:custo},
+    {label:"Categoria", name:"categoria", value:categoria},
+    {label:"Corretora", name:"corretora", value:corretora},
+  ]);
+}
+function editEvent(id, data, tipo, ativo, quantidade, valor, categoria, observacao) {
+  openModal("Editar evento manual", "event_edit", id, [
+    {label:"Data", name:"data", value:data, type:"date"},
+    {label:"Tipo", name:"tipo", value:tipo},
+    {label:"Ativo", name:"ativo", value:ativo},
+    {label:"Quantidade", name:"quantidade", value:quantidade},
+    {label:"Valor", name:"valor", value:valor},
+    {label:"Categoria", name:"categoria", value:categoria},
+    {label:"Observacao", name:"observacao", value:observacao},
+  ]);
+}
+</script>
 {% endblock %}

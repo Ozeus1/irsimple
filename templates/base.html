@@ -33,6 +33,7 @@
       <a class="{{ 'active' if request.endpoint == 'consolidado' else '' }}" href="{{ url_for('consolidado') }}">Relatorios B3</a>
       <a class="{{ 'active' if request.endpoint == 'conferencia_b3' else '' }}" href="{{ url_for('conferencia_b3') }}">Conferencia B3</a>
       <a class="{{ 'active' if request.endpoint in ['manual', 'delete_manual'] else '' }}" href="{{ url_for('manual') }}">Dados manuais</a>
+      <a class="{{ 'active' if request.endpoint in ['cnpjs', 'edit_cnpj', 'delete_cnpj', 'update_cnpjs_online'] else '' }}" href="{{ url_for('cnpjs') }}">CNPJs</a>
     </nav>
   </header>
   <main class="page">

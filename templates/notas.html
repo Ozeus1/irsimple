@@ -1,6 +1,29 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Notas de corretagem</h1>
+
+{# ── Modal de edição ── #}
+<div id="editModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:10px;padding:24px;min-width:340px;max-width:560px;width:94%;box-shadow:0 12px 40px rgba(0,0,0,.2);">
+    <h2 style="margin:0 0 16px;font-size:17px;">Editar nota de corretagem</h2>
+    <form id="editForm" method="post" action="{{ url_for('edit_nota') }}">
+      <input type="hidden" name="note_id" id="editId">
+      <div class="grid-form cols-2" style="gap:10px;">
+        <label>Data <input name="trade_date" id="editDate" type="date"></label>
+        <label>Numero da nota <input name="note_number" id="editNote"></label>
+        <label>IRRF comum <input name="irrf_common" id="editIrrfCommon"></label>
+        <label>IRRF day trade <input name="irrf_daytrade" id="editIrrfDT"></label>
+        <label>IRRF FII <input name="irrf_fii" id="editIrrfFii"></label>
+        <label>Base calculo <input name="irrf_base" id="editIrrfBase"></label>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+        <button type="button" onclick="closeModal()" style="padding:8px 16px;">Cancelar</button>
+        <button type="submit" class="primary" style="padding:8px 16px;">Salvar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <section class="panel">
   <form method="post" enctype="multipart/form-data" class="grid-form">
     <label>PDFs <input type="file" name="notas" multiple accept=".pdf"></label>
@@ -10,7 +33,7 @@
 <section class="panel">
   <table>
     <thead>
-      <tr><th>Data</th><th>Nota</th><th>IRRF comum</th><th>IRRF DT</th><th>IRRF FII</th><th>Base</th><th>Arquivo</th></tr>
+      <tr><th>Data</th><th>Nota</th><th>IRRF comum</th><th>IRRF DT</th><th>IRRF FII</th><th>Base</th><th>Arquivo</th><th></th></tr>
     </thead>
     <tbody>
       {% for r in rows %}
@@ -22,9 +45,31 @@
         <td>{{ fmt(r.irrf_fii) }}</td>
         <td>{{ fmt(r.irrf_base) }}</td>
         <td><a class="file-link" href="{{ url_for('download_nota', note_id=r.id) }}">{{ r.source_file|basename }}</a></td>
+        <td style="white-space:nowrap;">
+          <button class="link" onclick="editNota({{ r.id }}, {{ r.trade_date|tojson }}, {{ r.note_number|tojson }}, {{ r.irrf_common|tojson }}, {{ r.irrf_daytrade|tojson }}, {{ r.irrf_fii|tojson }}, {{ r.irrf_base|tojson }})">Editar</button>
+          &nbsp;
+          <form method="post" action="{{ url_for('delete_nota', note_id=r.id) }}" style="display:inline;">
+            <button class="link" style="color:var(--red);">Excluir</button>
+          </form>
+        </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
 </section>
+
+<script>
+function closeModal() { document.getElementById("editModal").style.display = "none"; }
+document.getElementById("editModal").addEventListener("click", function(e) { if (e.target === this) closeModal(); });
+function editNota(id, date, note, common, dt, fii, base) {
+  document.getElementById("editId").value = id;
+  document.getElementById("editDate").value = date || "";
+  document.getElementById("editNote").value = note || "";
+  document.getElementById("editIrrfCommon").value = common || "";
+  document.getElementById("editIrrfDT").value = dt || "";
+  document.getElementById("editIrrfFii").value = fii || "";
+  document.getElementById("editIrrfBase").value = base || "";
+  document.getElementById("editModal").style.display = "flex";
+}
+</script>
 {% endblock %}
