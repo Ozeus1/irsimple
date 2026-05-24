@@ -137,6 +137,32 @@ custody_transfers = [
         "status": "finalizado",
         "obs": "BBDC4 - BCO BRADESCO S.A.",
     },
+    {
+        "transfer_date": "2026-03-11",
+        "protocol": "#20260311193935030315",
+        "broker_from": "CM CAPITAL MARKETS CORR.",
+        "account_from": "1103483",
+        "broker_to": "BANCO BTG PACTUAL S/A",
+        "account_to": "11941614",
+        "ticker": "CMIG4",
+        "asset_type": "Acoes - PN",
+        "quantity": "600",
+        "status": "finalizado",
+        "obs": "CMIG4 - CIA ENERGETICA DE MINAS GERAIS",
+    },
+    {
+        "transfer_date": "2026-03-11",
+        "protocol": "#20260311193935030315",
+        "broker_from": "CM CAPITAL MARKETS CORR.",
+        "account_from": "1103483",
+        "broker_to": "BANCO BTG PACTUAL S/A",
+        "account_to": "11941614",
+        "ticker": "WEGE3",
+        "asset_type": "Acoes - ON",
+        "quantity": "200",
+        "status": "finalizado",
+        "obs": "WEGE3 - WEG S.A.",
+    },
 ]
 
 # ── Insere eventos corporativos ───────────────────────────────────────────────

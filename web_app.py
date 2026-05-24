@@ -722,7 +722,10 @@ def calculate_all() -> dict[int, core.CalculationResult]:
 
 def selected_year(results: dict[int, core.CalculationResult]) -> int:
     cfg = app_config()
-    year = int(cfg.get("selected_year") or max(results or {date.today().year - 1: None}))
+    # prioridade: config salva → ano atual → maior ano disponivel
+    current_year = date.today().year
+    configured = cfg.get("selected_year")
+    year = int(configured) if configured else (current_year if current_year in results else max(results or {current_year: None}))
     return year if year in results else max(results)
 
 
