@@ -106,8 +106,9 @@
             </thead>
             <tbody>
               {% for p in acoes %}
-              <tr>
-                <td class="text-start ps-3 fw-semibold">{{ p.code }}</td>
+              <tr class="cursor-pointer"
+                  onclick="window.location='{{ url_for('posicao_ticker', ticker=p.code, year=year) }}'">
+                <td class="text-start ps-3 fw-semibold text-primary">{{ p.code }}</td>
                 <td>{{ p.qty | fmt_dec }}</td>
                 <td>{{ p.avg_price | fmt }}</td>
                 <td>{{ (p.qty * p.avg_price) | fmt }}</td>
@@ -140,8 +141,9 @@
             </thead>
             <tbody>
               {% for p in fiis %}
-              <tr>
-                <td class="text-start ps-3 fw-semibold">{{ p.code }}</td>
+              <tr class="cursor-pointer"
+                  onclick="window.location='{{ url_for('posicao_ticker', ticker=p.code, year=year) }}'">
+                <td class="text-start ps-3 fw-semibold text-primary">{{ p.code }}</td>
                 <td>{{ p.qty | fmt_dec }}</td>
                 <td>{{ p.avg_price | fmt }}</td>
                 <td>{{ (p.qty * p.avg_price) | fmt }}</td>

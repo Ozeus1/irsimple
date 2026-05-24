@@ -205,3 +205,5 @@ canvas { width: 100%; background: white; border: 1px solid var(--line); border-r
 }
 .card-stat { cursor: pointer; transition: box-shadow .15s, transform .1s; }
 .card-stat:hover { box-shadow: 0 4px 16px rgba(0,0,0,.12); transform: translateY(-2px); }
+.cursor-pointer { cursor: pointer; }
+.cursor-pointer:hover td { background-color: rgba(13,110,253,.06) !important; }
