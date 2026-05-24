@@ -1836,63 +1836,63 @@ def transferencias() -> str | Response:
     if request.method == "POST":
         action = request.form.get("action", "add")
         if action == "import_csv":
-            import csv, io
+            import csv, io, unicodedata
             f = request.files.get("csv_file")
             if not f or not f.filename:
                 flash("Nenhum arquivo selecionado.", "danger")
                 return redirect(url_for("transferencias"))
             text = f.read().decode("utf-8-sig").strip()
             reader = csv.DictReader(io.StringIO(text))
-            # normaliza cabecalhos: minusculo sem acentos/espacos
             def _norm(s: str) -> str:
-                import unicodedata
                 s = unicodedata.normalize("NFD", s.lower().strip())
                 return "".join(c for c in s if unicodedata.category(c) != "Mn").replace(" ", "_").replace("/", "_")
-            inserted = 0
-            errors = []
+            inserted = updated = skipped = 0
             with core.db_connect() as conn:
                 for i, row in enumerate(reader, start=2):
                     nrow = {_norm(k): v.strip() for k, v in row.items() if k}
                     ticker = nrow.get("ticker", "").upper().strip()
                     date_val = nrow.get("data", "")
                     if not ticker or not date_val:
-                        errors.append(f"Linha {i}: ticker ou data ausente.")
                         continue
-                    qty = nrow.get("quantidade", nrow.get("qtd", "0")) or "0"
-                    # verifica duplicata
                     proto = nrow.get("protocolo", nrow.get("protocolo_b3", ""))
+                    qty = nrow.get("quantidade", nrow.get("qtd", "")) or ""
+                    broker_from = nrow.get("corretora_origem", nrow.get("origem", ""))
+                    account_from = nrow.get("conta_origem", nrow.get("conta_orig.", ""))
+                    broker_to = nrow.get("corretora_destino", nrow.get("destino", ""))
+                    account_to = nrow.get("conta_destino", nrow.get("conta_dest.", ""))
+                    asset_type = nrow.get("tipo_de_ativo", nrow.get("tipo", "Acoes - ON"))
+                    status = nrow.get("status", "finalizado").lower()
+                    obs = nrow.get("observacao", nrow.get("obs", ""))
                     dup = conn.execute(
-                        "SELECT 1 FROM custody_transfers WHERE user_id=? AND transfer_date=? AND ticker=? AND protocol=?",
+                        "SELECT id, quantity FROM custody_transfers WHERE user_id=? AND transfer_date=? AND ticker=? AND protocol=?",
                         (uid, date_val, ticker, proto),
                     ).fetchone()
                     if dup:
-                        errors.append(f"Linha {i}: {ticker} {date_val} ja existe (ignorado).")
+                        # atualiza quantidade se o registro existente tem 0 e agora temos valor real
+                        if qty and qty != "0" and (not dup["quantity"] or dup["quantity"] == "0"):
+                            conn.execute(
+                                "UPDATE custody_transfers SET quantity=?, broker_from=?, account_from=?, broker_to=?, account_to=?, asset_type=?, status=?, obs=? WHERE id=?",
+                                (qty, broker_from, account_from, broker_to, account_to, asset_type, status, obs, dup["id"]),
+                            )
+                            updated += 1
+                        else:
+                            skipped += 1
                         continue
                     conn.execute(
                         """INSERT INTO custody_transfers
                            (user_id, transfer_date, protocol, broker_from, account_from,
                             broker_to, account_to, ticker, asset_type, quantity, status, obs)
                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (
-                            uid,
-                            date_val,
-                            proto,
-                            nrow.get("corretora_origem", nrow.get("origem", "")),
-                            nrow.get("conta_origem", nrow.get("conta_orig.", "")),
-                            nrow.get("corretora_destino", nrow.get("destino", "")),
-                            nrow.get("conta_destino", nrow.get("conta_dest.", "")),
-                            ticker,
-                            nrow.get("tipo_de_ativo", nrow.get("tipo", "Acoes - ON")),
-                            qty,
-                            nrow.get("status", "finalizado").lower(),
-                            nrow.get("observacao", nrow.get("obs", "")),
-                        ),
+                        (uid, date_val, proto, broker_from, account_from,
+                         broker_to, account_to, ticker, asset_type,
+                         qty or "0", status, obs),
                     )
                     inserted += 1
-            msg = f"{inserted} transferencia(s) importada(s)."
-            if errors:
-                msg += " Avisos: " + " | ".join(errors)
-            flash(msg, "success" if inserted > 0 else "warning")
+            parts = []
+            if inserted:  parts.append(f"{inserted} inserida(s)")
+            if updated:   parts.append(f"{updated} atualizada(s) com quantidade")
+            if skipped:   parts.append(f"{skipped} ignorada(s) (ja existiam)")
+            flash(", ".join(parts) + "." if parts else "Nenhuma linha processada.", "success" if inserted or updated else "warning")
             return redirect(url_for("transferencias"))
         if action == "delete":
             item_id = int(request.form.get("item_id", 0))

@@ -23,7 +23,8 @@
           <option value="split">Split / Desdobramento</option>
           <option value="grupamento">Grupamento (inplit)</option>
           <option value="bonificacao">Bonificacao / Subscricao</option>
-          <option value="fusao_corretora">Fusao / Aquisicao de Corretora</option>
+          <option value="fusao_corretora">Fusao de Corretora (migra todos os ativos)</option>
+          <option value="aquisicao_corretora">Aquisicao de Corretora (compra por outra)</option>
           <option value="renomeacao">Renomeacao de Ticker</option>
           <option value="conversao">Conversao de Ativo</option>
         </select>
@@ -93,7 +94,8 @@
                 'split': 'Split',
                 'grupamento': 'Grupamento',
                 'bonificacao': 'Bonificacao',
-                'fusao_corretora': 'Fusao/Aquisicao',
+                'fusao_corretora': 'Fusao Corretora',
+                'aquisicao_corretora': 'Aquisicao Corretora',
                 'renomeacao': 'Renomeacao',
                 'conversao': 'Conversao'
               } %}
@@ -102,6 +104,7 @@
                 {% elif r.event_type == 'grupamento' %}bg-warning text-dark
                 {% elif r.event_type == 'bonificacao' %}bg-success
                 {% elif r.event_type == 'fusao_corretora' %}bg-primary
+                {% elif r.event_type == 'aquisicao_corretora' %}bg-primary
                 {% else %}bg-secondary{% endif %}">
                 {{ type_labels.get(r.event_type, r.event_type) }}
               </span>
@@ -147,8 +150,10 @@
     <li><strong>Split/Desdobramento:</strong> fator 4 = cada acao vira 4. Multiplica a quantidade.</li>
     <li><strong>Grupamento:</strong> fator 4 = cada 4 acoes viram 1. Divide a quantidade.</li>
     <li><strong>Bonificacao:</strong> acrescenta quantidade e custo ao ativo.</li>
-    <li><strong>Fusao/Aquisicao de Corretora:</strong> migra <em>todos</em> os ativos da corretora origem para destino
+    <li><strong>Fusao de Corretora:</strong> migra <em>todos</em> os ativos da corretora origem para destino na data do evento
       (ex: Banco Modal → XP em 30/08/2023).</li>
+    <li><strong>Aquisicao de Corretora:</strong> a partir da data registrada, operacoes da corretora antiga passam a ser consideradas como da nova corretora
+      (ex: Genial comprada pela XP). Mesmo efeito da Fusao — migra todos os ativos.</li>
     <li><strong>Renomeacao/Conversao:</strong> renomeia o ticker (ex: NATU3 → NTCO3).</li>
   </ul>
 </div>
@@ -176,7 +181,8 @@
                 <option value="split">Split / Desdobramento</option>
                 <option value="grupamento">Grupamento (inplit)</option>
                 <option value="bonificacao">Bonificacao / Subscricao</option>
-                <option value="fusao_corretora">Fusao / Aquisicao de Corretora</option>
+                <option value="fusao_corretora">Fusao de Corretora (migra todos os ativos)</option>
+                <option value="aquisicao_corretora">Aquisicao de Corretora (compra por outra)</option>
                 <option value="renomeacao">Renomeacao de Ticker</option>
                 <option value="conversao">Conversao de Ativo</option>
               </select>
@@ -227,7 +233,7 @@
 <script>
 function toggleFields() {
   var t = document.getElementById('evtType').value;
-  var isFusao = t === 'fusao_corretora';
+  var isFusao = t === 'fusao_corretora' || t === 'aquisicao_corretora';
   var isSplit = t === 'split' || t === 'grupamento';
   var isBonus = t === 'bonificacao';
   var isRename = t === 'renomeacao' || t === 'conversao';
@@ -243,7 +249,7 @@ toggleFields();
 
 function toggleEditFields() {
   var t = document.getElementById('eedit_type').value;
-  var isFusao = t === 'fusao_corretora';
+  var isFusao = t === 'fusao_corretora' || t === 'aquisicao_corretora';
   var isSplit = t === 'split' || t === 'grupamento';
   var isBonus = t === 'bonificacao';
   var isRename = t === 'renomeacao' || t === 'conversao';

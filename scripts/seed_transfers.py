@@ -43,7 +43,7 @@ print("Registros anteriores removidos.")
 corp_events = [
     {
         "event_date": "2023-08-30",
-        "event_type": "fusao_corretora",
+        "event_type": "aquisicao_corretora",
         "ticker": "",
         "ticker_new": "",
         "factor": "1",
@@ -51,7 +51,7 @@ corp_events = [
         "bonus_cost": "0",
         "broker_from": "BANCO MODAL S.A.",
         "broker_to": "XP INVESTIMENTOS CCTVM S/A",
-        "obs": "Banco Modal adquirido pela XP em 30/08/2023",
+        "obs": "Banco Modal adquirido pela XP em 30/08/2023. Conta Modal: CNPJ 30.723.886/0001-62",
     },
 ]
 
