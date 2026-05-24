@@ -40,7 +40,7 @@ app.secret_key = SECRET_KEY
 
 LOGIN_EMAIL = os.environ.get("IRSIMPLE_LOGIN_EMAIL", "orlei1@yahoo.com").strip().lower()
 PASSWORD_HASH = os.environ.get("IRSIMPLE_PASSWORD_HASH", "").strip()
-TEMP_PASSWORD = os.environ.get("IRSIMPLE_TEMP_PASSWORD", "irsimple@2026")
+TEMP_PASSWORD = os.environ.get("IRSIMPLE_TEMP_PASSWORD", "IRSimple@Reset2026")
 
 
 @app.template_filter("basename")
