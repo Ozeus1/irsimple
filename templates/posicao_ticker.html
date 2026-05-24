@@ -14,7 +14,9 @@
     <a class="btn btn-sm {{ 'btn-primary' if y == year else 'btn-outline-secondary' }}"
        href="{{ url_for('posicao_ticker', ticker=ticker, year=y) }}">{{ y }}</a>
     {% endfor %}
-    <button class="btn btn-sm btn-success ms-2" onclick="openAddModal()">
+    <button class="btn btn-sm btn-success ms-2"
+            data-bs-toggle="modal" data-bs-target="#addEventModal"
+            onclick="selectType('compra')">
       <i class="bi bi-plus-circle me-1"></i>Inserir evento
     </button>
     <a href="{{ url_for('inicio', year=year) }}" class="btn btn-sm btn-outline-secondary">
@@ -345,13 +347,6 @@
 </datalist>
 
 <script>
-const addModal = new bootstrap.Modal(document.getElementById('addEventModal'));
-
-function openAddModal() {
-  selectType('compra');
-  addModal.show();
-}
-
 function selectType(type) {
   document.querySelectorAll('.type-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.type === type);
