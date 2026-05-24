@@ -4,49 +4,88 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title or "IRSimple Web" }}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand-row">
-      <a class="brand" href="{{ url_for('dashboard') }}">IRSimple Web</a>
-      <div class="session-tools">
-        <span class="user-pill">Usuario: {{ username }}</span>
+  <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+    <div class="container-fluid">
+      <a class="navbar-brand fw-bold" href="{{ url_for('dashboard') }}">
+        <i class="bi bi-bar-chart-line-fill me-1"></i> IRSimple Web
+      </a>
+      <div class="d-flex align-items-center gap-2 ms-auto">
+        <span class="badge bg-light text-primary border border-primary-subtle px-3 py-2">
+          <i class="bi bi-person-circle me-1"></i>{{ username }}
+        </span>
         {% if session.get("authenticated") %}
-        <a class="logout-button" href="{{ url_for('change_password') }}">Senha</a>
-        <form method="post" action="{{ url_for('logout') }}">
-          <button type="submit" class="logout-button">Sair</button>
+        <a class="btn btn-sm btn-outline-light" href="{{ url_for('change_password') }}">
+          <i class="bi bi-key"></i> Senha
+        </a>
+        <form method="post" action="{{ url_for('logout') }}" class="m-0">
+          <button type="submit" class="btn btn-sm btn-outline-light">
+            <i class="bi bi-box-arrow-right"></i> Sair
+          </button>
         </form>
         {% endif %}
+        <button class="navbar-toggler border-0" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+      </div>
+      <div class="collapse navbar-collapse mt-2 mt-lg-0" id="mainNav">
+        <ul class="navbar-nav me-auto flex-wrap gap-1">
+          {% set nav = [
+            ('dashboard', 'bi-house', 'Inicio'),
+            ('calculo',   'bi-calculator', 'Calculo mensal'),
+            ('anual',     'bi-file-earmark-text', 'Declaracao anual'),
+            ('historico', 'bi-clock-history', 'Historico'),
+            ('carteira',  'bi-briefcase', 'Carteira'),
+            ('opcoes',    'bi-arrow-left-right', 'Opcoes'),
+            ('notas',     'bi-receipt', 'Notas'),
+            ('patrimonio','bi-piggy-bank', 'Patrimonio'),
+            ('consolidado','bi-folder2-open', 'Relatorios B3'),
+            ('conferencia_b3','bi-check2-square', 'Conferencia B3'),
+            ('manual',    'bi-pencil-square', 'Dados manuais'),
+            ('cnpjs',     'bi-building', 'CNPJs'),
+          ] %}
+          {% for endpoint, icon, label in nav %}
+          {% set active_endpoints = {
+            'calculo': ['calculo','detalhe'],
+            'notas': ['notas','download_nota'],
+            'manual': ['manual','delete_manual'],
+            'cnpjs': ['cnpjs','edit_cnpj','delete_cnpj','update_cnpjs_online'],
+          } %}
+          {% set is_active = request.endpoint == endpoint or request.endpoint in active_endpoints.get(endpoint, []) %}
+          <li class="nav-item">
+            <a class="nav-link px-2 py-1 rounded {{ 'active bg-white bg-opacity-25 fw-semibold' if is_active else '' }}"
+               href="{{ url_for(endpoint) }}">
+              <i class="bi {{ icon }} me-1"></i>{{ label }}
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
       </div>
     </div>
-    <nav>
-      <a class="{{ 'active' if request.endpoint == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}">Inicio</a>
-      <a class="{{ 'active' if request.endpoint in ['calculo', 'detalhe'] else '' }}" href="{{ url_for('calculo') }}">Calculo mensal</a>
-      <a class="{{ 'active' if request.endpoint == 'anual' else '' }}" href="{{ url_for('anual') }}">Declaracao anual</a>
-      <a class="{{ 'active' if request.endpoint == 'historico' else '' }}" href="{{ url_for('historico') }}">Historico</a>
-      <a class="{{ 'active' if request.endpoint == 'carteira' else '' }}" href="{{ url_for('carteira') }}">Carteira</a>
-      <a class="{{ 'active' if request.endpoint == 'opcoes' else '' }}" href="{{ url_for('opcoes') }}">Opcoes</a>
-      <a class="{{ 'active' if request.endpoint in ['notas', 'download_nota'] else '' }}" href="{{ url_for('notas') }}">Notas</a>
-      <a class="{{ 'active' if request.endpoint == 'patrimonio' else '' }}" href="{{ url_for('patrimonio') }}">Patrimonio</a>
-      <a class="{{ 'active' if request.endpoint == 'consolidado' else '' }}" href="{{ url_for('consolidado') }}">Relatorios B3</a>
-      <a class="{{ 'active' if request.endpoint == 'conferencia_b3' else '' }}" href="{{ url_for('conferencia_b3') }}">Conferencia B3</a>
-      <a class="{{ 'active' if request.endpoint in ['manual', 'delete_manual'] else '' }}" href="{{ url_for('manual') }}">Dados manuais</a>
-      <a class="{{ 'active' if request.endpoint in ['cnpjs', 'edit_cnpj', 'delete_cnpj', 'update_cnpjs_online'] else '' }}" href="{{ url_for('cnpjs') }}">CNPJs</a>
-    </nav>
-  </header>
-  <main class="page">
+  </nav>
+
+  <div class="container-fluid page py-3 px-3 px-lg-4">
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
-        <div class="messages">
+        <div class="messages mb-3">
           {% for category, message in messages %}
-            <div class="message {{ category }}">{{ message }}</div>
+            <div class="alert alert-{{ 'success' if category == 'success' else 'warning' if category == 'warning' else 'danger' if category == 'danger' else 'info' }} alert-dismissible fade show py-2" role="alert">
+              <i class="bi {{ 'bi-check-circle' if category == 'success' else 'bi-exclamation-triangle' if category == 'warning' else 'bi-x-circle' if category == 'danger' else 'bi-info-circle' }} me-1"></i>
+              {{ message }}
+              <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+            </div>
           {% endfor %}
         </div>
       {% endif %}
     {% endwith %}
     {% block content %}{% endblock %}
-  </main>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

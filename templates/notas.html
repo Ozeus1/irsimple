@@ -1,75 +1,96 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Notas de corretagem</h1>
+<h1 class="page-title">Notas de corretagem</h1>
 
 {# ── Modal de edição ── #}
-<div id="editModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:10px;padding:24px;min-width:340px;max-width:560px;width:94%;box-shadow:0 12px 40px rgba(0,0,0,.2);">
-    <h2 style="margin:0 0 16px;font-size:17px;">Editar nota de corretagem</h2>
-    <form id="editForm" method="post" action="{{ url_for('edit_nota') }}">
+<div class="modal-backdrop" id="editModal">
+  <div class="modal-box">
+    <h2 class="modal-title">Editar nota de corretagem</h2>
+    <form method="post" action="{{ url_for('edit_nota') }}">
       <input type="hidden" name="note_id" id="editId">
-      <div class="grid-form cols-2" style="gap:10px;">
-        <label>Data <input name="trade_date" id="editDate" type="date"></label>
-        <label>Numero da nota <input name="note_number" id="editNote"></label>
-        <label>IRRF comum <input name="irrf_common" id="editIrrfCommon"></label>
-        <label>IRRF day trade <input name="irrf_daytrade" id="editIrrfDT"></label>
-        <label>IRRF FII <input name="irrf_fii" id="editIrrfFii"></label>
-        <label>Base calculo <input name="irrf_base" id="editIrrfBase"></label>
+      <div class="row g-2">
+        <div class="col-6"><label class="form-label">Data<input class="form-control form-control-sm" name="trade_date" id="editDate" type="date"></label></div>
+        <div class="col-6"><label class="form-label">Numero da nota<input class="form-control form-control-sm" name="note_number" id="editNote"></label></div>
+        <div class="col-6"><label class="form-label">IRRF comum<input class="form-control form-control-sm" name="irrf_common" id="editIrrfCommon"></label></div>
+        <div class="col-6"><label class="form-label">IRRF day trade<input class="form-control form-control-sm" name="irrf_daytrade" id="editIrrfDT"></label></div>
+        <div class="col-6"><label class="form-label">IRRF FII<input class="form-control form-control-sm" name="irrf_fii" id="editIrrfFii"></label></div>
+        <div class="col-6"><label class="form-label">Base calculo<input class="form-control form-control-sm" name="irrf_base" id="editIrrfBase"></label></div>
       </div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
-        <button type="button" onclick="closeModal()" style="padding:8px 16px;">Cancelar</button>
-        <button type="submit" class="primary" style="padding:8px 16px;">Salvar</button>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Salvar</button>
       </div>
     </form>
   </div>
 </div>
 
-<section class="panel">
-  <form method="post" enctype="multipart/form-data" class="grid-form">
-    <label>PDFs <input type="file" name="notas" multiple accept=".pdf"></label>
-    <button>Importar notas</button>
-  </form>
-</section>
-<section class="panel">
-  <table>
-    <thead>
-      <tr><th>Data</th><th>Nota</th><th>IRRF comum</th><th>IRRF DT</th><th>IRRF FII</th><th>Base</th><th>Arquivo</th><th></th></tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-      <tr>
-        <td>{{ r.trade_date }}</td>
-        <td>{{ r.note_number }}</td>
-        <td>{{ fmt(r.irrf_common) }}</td>
-        <td>{{ fmt(r.irrf_daytrade) }}</td>
-        <td>{{ fmt(r.irrf_fii) }}</td>
-        <td>{{ fmt(r.irrf_base) }}</td>
-        <td><a class="file-link" href="{{ url_for('download_nota', note_id=r.id) }}">{{ r.source_file|basename }}</a></td>
-        <td style="white-space:nowrap;">
-          <button class="link" onclick="editNota({{ r.id }}, {{ r.trade_date|tojson }}, {{ r.note_number|tojson }}, {{ r.irrf_common|tojson }}, {{ r.irrf_daytrade|tojson }}, {{ r.irrf_fii|tojson }}, {{ r.irrf_base|tojson }})">Editar</button>
-          &nbsp;
-          <form method="post" action="{{ url_for('delete_nota', note_id=r.id) }}" style="display:inline;">
-            <button class="link" style="color:var(--red);">Excluir</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+<div class="card mb-4">
+  <div class="card-header"><i class="bi bi-upload"></i> Importar PDFs</div>
+  <div class="card-body">
+    <form method="post" enctype="multipart/form-data" class="d-flex gap-2 align-items-end">
+      <label class="form-label flex-grow-1">Arquivos PDF
+        <input type="file" class="form-control form-control-sm" name="notas" multiple accept=".pdf">
+      </label>
+      <button class="btn btn-primary btn-sm"><i class="bi bi-upload"></i> Importar notas</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><i class="bi bi-file-earmark-text"></i> Registros</div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover table-sm mb-0">
+        <thead>
+          <tr><th>Data</th><th>Nota</th><th class="text-end">IRRF comum</th><th class="text-end">IRRF DT</th><th class="text-end">IRRF FII</th><th class="text-end">Base</th><th>Arquivo</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>{{ r.trade_date }}</td>
+            <td>{{ r.note_number }}</td>
+            <td class="text-end">{{ fmt(r.irrf_common) }}</td>
+            <td class="text-end">{{ fmt(r.irrf_daytrade) }}</td>
+            <td class="text-end">{{ fmt(r.irrf_fii) }}</td>
+            <td class="text-end">{{ fmt(r.irrf_base) }}</td>
+            <td><a class="text-primary fw-semibold" href="{{ url_for('download_nota', note_id=r.id) }}">{{ r.source_file|basename }}</a></td>
+            <td class="text-end text-nowrap">
+              <button class="btn btn-outline-primary btn-sm edit-nota-btn"
+                data-id="{{ r.id }}"
+                data-date="{{ r.trade_date }}"
+                data-note="{{ r.note_number }}"
+                data-common="{{ r.irrf_common }}"
+                data-dt="{{ r.irrf_daytrade }}"
+                data-fii="{{ r.irrf_fii }}"
+                data-base="{{ r.irrf_base }}">
+                <i class="bi bi-pencil"></i> Editar
+              </button>
+              <form method="post" action="{{ url_for('delete_nota', note_id=r.id) }}" class="d-inline">
+                <button class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i> Excluir</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
 <script>
-function closeModal() { document.getElementById("editModal").style.display = "none"; }
+document.querySelectorAll(".edit-nota-btn").forEach(function(btn) {
+  btn.addEventListener("click", function() {
+    document.getElementById("editId").value = btn.dataset.id;
+    document.getElementById("editDate").value = btn.dataset.date || "";
+    document.getElementById("editNote").value = btn.dataset.note || "";
+    document.getElementById("editIrrfCommon").value = btn.dataset.common || "";
+    document.getElementById("editIrrfDT").value = btn.dataset.dt || "";
+    document.getElementById("editIrrfFii").value = btn.dataset.fii || "";
+    document.getElementById("editIrrfBase").value = btn.dataset.base || "";
+    document.getElementById("editModal").classList.add("active");
+  });
+});
+function closeModal() { document.getElementById("editModal").classList.remove("active"); }
 document.getElementById("editModal").addEventListener("click", function(e) { if (e.target === this) closeModal(); });
-function editNota(id, date, note, common, dt, fii, base) {
-  document.getElementById("editId").value = id;
-  document.getElementById("editDate").value = date || "";
-  document.getElementById("editNote").value = note || "";
-  document.getElementById("editIrrfCommon").value = common || "";
-  document.getElementById("editIrrfDT").value = dt || "";
-  document.getElementById("editIrrfFii").value = fii || "";
-  document.getElementById("editIrrfBase").value = base || "";
-  document.getElementById("editModal").style.display = "flex";
-}
 </script>
 {% endblock %}
