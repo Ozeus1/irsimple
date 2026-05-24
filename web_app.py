@@ -11,10 +11,14 @@ from __future__ import annotations
 
 import io
 import os
+import secrets
+import smtplib
 import sqlite3
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
@@ -485,6 +489,120 @@ def carry_positions(result: core.CalculationResult) -> list[core.Position]:
 def carry_losses(result: core.CalculationResult) -> dict[str, Decimal]:
     last = result.monthly[-1]
     return {"normal": last.normal_loss_after, "daytrade": last.daytrade_loss_after, "fii": last.fii_loss_after}
+
+
+# --- SMTP ---
+
+def get_smtp_config() -> dict[str, Any]:
+    with core.db_connect() as conn:
+        row = conn.execute("SELECT * FROM smtp_config WHERE id = 1").fetchone()
+    if row:
+        return dict(row)
+    return {"host": "", "port": 587, "secure": 0, "username": "", "password": "", "from_addr": ""}
+
+
+def save_smtp_config(host: str, port: int, secure: bool, username: str, password: str, from_addr: str) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with core.db_connect() as conn:
+        conn.execute(
+            """INSERT INTO smtp_config (id, host, port, secure, username, password, from_addr, updated_at)
+               VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 host=excluded.host, port=excluded.port, secure=excluded.secure,
+                 username=excluded.username, password=excluded.password,
+                 from_addr=excluded.from_addr, updated_at=excluded.updated_at""",
+            (host, port, 1 if secure else 0, username, password, from_addr, now),
+        )
+
+
+def send_email(to: str, subject: str, body_html: str) -> None:
+    cfg = get_smtp_config()
+    if not cfg.get("host") or not cfg.get("username"):
+        raise RuntimeError("SMTP nao configurado. Configure em Admin > SMTP.")
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = cfg.get("from_addr") or cfg["username"]
+    msg["To"] = to
+    msg.attach(MIMEText(body_html, "html", "utf-8"))
+    port = int(cfg.get("port") or 587)
+    use_ssl = bool(cfg.get("secure"))
+    if use_ssl:
+        server = smtplib.SMTP_SSL(cfg["host"], port, timeout=15)
+    else:
+        server = smtplib.SMTP(cfg["host"], port, timeout=15)
+        server.starttls()
+    server.login(cfg["username"], cfg.get("password") or "")
+    server.sendmail(msg["From"], [to], msg.as_string())
+    server.quit()
+
+
+# --- Reset de senha ---
+
+RESET_TOKEN_EXPIRY_HOURS = 1
+
+
+def create_reset_token(email: str) -> str:
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now(timezone.utc) + timedelta(hours=RESET_TOKEN_EXPIRY_HOURS)).isoformat()
+    with core.db_connect() as conn:
+        conn.execute("DELETE FROM password_reset_tokens WHERE email = ?", (email,))
+        conn.execute(
+            "INSERT INTO password_reset_tokens (email, token, expires_at) VALUES (?, ?, ?)",
+            (email, token, expires_at),
+        )
+    return token
+
+
+def validate_reset_token(token: str) -> str | None:
+    with core.db_connect() as conn:
+        row = conn.execute(
+            "SELECT email, expires_at, used FROM password_reset_tokens WHERE token = ?", (token,)
+        ).fetchone()
+    if not row:
+        return None
+    if row["used"]:
+        return None
+    expires = datetime.fromisoformat(row["expires_at"])
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires:
+        return None
+    return str(row["email"])
+
+
+def consume_reset_token(token: str) -> None:
+    with core.db_connect() as conn:
+        conn.execute("UPDATE password_reset_tokens SET used = 1 WHERE token = ?", (token,))
+
+
+def reset_password_for_email(email: str, new_password: str) -> bool:
+    with core.db_connect() as conn:
+        row = conn.execute("SELECT id FROM users WHERE username = ?", (email,)).fetchone()
+    if not row:
+        return False
+    user_id = int(row["id"])
+    password_hash = generate_password_hash(new_password)
+    with core.db_connect() as conn:
+        conn.execute(
+            "INSERT INTO app_config (user_id, key, value) VALUES (?, 'login_password_hash', ?) "
+            "ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+            (user_id, password_hash),
+        )
+    return True
+
+
+def is_admin() -> bool:
+    return bool(session.get("authenticated") and str(session.get("username", "")).lower() == LOGIN_EMAIL)
+
+
+def admin_required(view: Callable[..., Any]) -> Callable[..., Any]:
+    @wraps(view)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        if not is_admin():
+            flash("Acesso restrito a administradores.", "danger")
+            return redirect(url_for("index"))
+        return view(*args, **kwargs)
+    return wrapped
 
 
 def loss_effect_date(base_date: date | None) -> date | None:
@@ -1181,6 +1299,112 @@ def change_password() -> str | Response:
             flash("Senha alterada com sucesso.", "success")
             return redirect(url_for("dashboard"))
     return render_template("change_password.html", temporary=using_temporary_password())
+
+
+@app.route("/esqueci-senha", methods=["GET", "POST"])
+def forgot_password() -> str | Response:
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        if email == LOGIN_EMAIL:
+            try:
+                token = create_reset_token(email)
+                reset_url = url_for("reset_password", token=token, _external=True)
+                body = (
+                    f"<p>Voce solicitou a redefinicao de senha do IRSimple.</p>"
+                    f"<p><a href='{reset_url}'>Clique aqui para redefinir sua senha</a></p>"
+                    f"<p>Este link expira em {RESET_TOKEN_EXPIRY_HOURS} hora(s).</p>"
+                    f"<p>Se nao foi voce, ignore este e-mail.</p>"
+                )
+                send_email(email, "IRSimple - Redefinicao de senha", body)
+                flash("Se o e-mail estiver cadastrado, voce recebera as instrucoes em breve.", "info")
+            except Exception as exc:
+                flash(f"Erro ao enviar e-mail: {exc}", "danger")
+        else:
+            flash("Se o e-mail estiver cadastrado, voce recebera as instrucoes em breve.", "info")
+        return redirect(url_for("forgot_password"))
+    return render_template("forgot_password.html")
+
+
+@app.route("/redefinir-senha/<token>", methods=["GET", "POST"])
+def reset_password(token: str) -> str | Response:
+    email = validate_reset_token(token)
+    if not email:
+        flash("Link invalido ou expirado. Solicite um novo link.", "danger")
+        return redirect(url_for("forgot_password"))
+    if request.method == "POST":
+        new = request.form.get("new_password", "")
+        confirm = request.form.get("confirm_password", "")
+        if len(new) < 8:
+            flash("A senha deve ter pelo menos 8 caracteres.", "warning")
+        elif new != confirm:
+            flash("As senhas nao conferem.", "warning")
+        else:
+            reset_password_for_email(email, new)
+            consume_reset_token(token)
+            flash("Senha redefinida com sucesso. Faca login.", "success")
+            return redirect(url_for("index"))
+    return render_template("reset_password.html", token=token)
+
+
+@app.route("/admin")
+@admin_required
+def admin() -> str:
+    users = db_rows("SELECT id, username, created_at FROM users ORDER BY id")
+    smtp = get_smtp_config()
+    return render_template("admin.html", users=users, smtp=smtp, login_email=LOGIN_EMAIL)
+
+
+@app.route("/admin/smtp", methods=["POST"])
+@admin_required
+def admin_save_smtp() -> Response:
+    host = request.form.get("host", "").strip()
+    port = int(request.form.get("port") or 587)
+    secure = request.form.get("secure") == "true"
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    from_addr = request.form.get("from_addr", "").strip()
+    save_smtp_config(host, port, secure, username, password, from_addr)
+    flash("Configuracoes SMTP salvas.", "success")
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/smtp/test", methods=["POST"])
+@admin_required
+def admin_test_smtp() -> Response:
+    to = request.form.get("to", "").strip()
+    if not to:
+        flash("Informe o e-mail de destino para o teste.", "warning")
+        return redirect(url_for("admin"))
+    try:
+        send_email(to, "IRSimple - Teste de SMTP", "<p>Configuracao SMTP funcionando corretamente.</p>")
+        flash(f"E-mail de teste enviado para {to}.", "success")
+    except Exception as exc:
+        flash(f"Erro no envio: {exc}", "danger")
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/usuario/<int:user_id>/delete", methods=["POST"])
+@admin_required
+def admin_delete_user(user_id: int) -> Response:
+    with core.db_connect() as conn:
+        row = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row and str(row["username"]).lower() == LOGIN_EMAIL:
+            flash("Nao e possivel excluir o usuario administrador.", "danger")
+            return redirect(url_for("admin"))
+        if row:
+            conn.execute("DELETE FROM app_config WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM trades WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM movements WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM manual_positions WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM manual_events WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM asset_cnpjs WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM brokerage_note_taxes WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM source_files WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            flash(f"Usuario '{row['username']}' excluido.", "success")
+        else:
+            flash("Usuario nao encontrado.", "warning")
+    return redirect(url_for("admin"))
 
 
 @app.route("/dashboard")
