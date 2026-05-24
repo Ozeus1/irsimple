@@ -55,6 +55,23 @@ def date_input_filter(value: Any) -> str:
     return parsed.isoformat() if parsed else str(value or "")
 
 
+@app.template_filter("fmt")
+def fmt_filter(value: Any) -> str:
+    return core.fmt_money(value)
+
+
+@app.template_filter("fmt_dec")
+def fmt_dec_filter(value: Any) -> str:
+    return core.fmt_decimal(value)
+
+
+@app.template_filter("regex_search")
+def regex_search_filter(value: Any, pattern: str) -> str:
+    import re
+    m = re.search(pattern, str(value or ""))
+    return m.group(1) if m and m.lastindex else ""
+
+
 def current_username() -> str:
     return str(session.get("username") or "").strip().lower() or core.DEFAULT_USER
 
@@ -1563,6 +1580,41 @@ def dashboard() -> str:
         neg_file=active_source("negociacao"),
         mov_file=active_source("movimentacao"),
         consolidated=source_files("consolidado"),
+    )
+
+
+@app.route("/inicio")
+@login_required
+def inicio() -> str:
+    try:
+        results = calculate_all()
+    except Exception:
+        results = {}
+    year = int(request.args.get("year") or (selected_year(results) if results else date.today().year))
+    if year not in results:
+        year = max(results) if results else date.today().year
+    result = results.get(year)
+    calc_rows = monthly_rows(result) if result else []
+    summary = result_summary(result) if result else {}
+    positions = list(result.positions.values()) if result else []
+    acoes = sorted(
+        [p for p in positions if p.qty > 0 and p.category not in {"fii", "opcoes", "futuro"}],
+        key=lambda p: p.code,
+    )
+    fiis = sorted(
+        [p for p in positions if p.qty > 0 and p.category == "fii"],
+        key=lambda p: p.code,
+    )
+    opcoes_pos = result.pending_options if result else []
+    return render_template(
+        "inicio.html",
+        year=year,
+        years=sorted(results),
+        calc_rows=calc_rows,
+        summary=summary,
+        acoes=acoes,
+        fiis=fiis,
+        opcoes_pos=opcoes_pos,
     )
 
 

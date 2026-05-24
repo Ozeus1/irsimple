@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% block content %}
+
+{# ── Cabeçalho ── #}
+<div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
+  <div>
+    <h1 class="mb-0">Dashboard</h1>
+    <p class="text-muted mb-0">Resumo do ano {{ year }}</p>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    {% for y in years %}
+    <a class="btn btn-sm {{ 'btn-primary' if y == year else 'btn-outline-secondary' }}"
+       href="{{ url_for('inicio', year=y) }}">{{ y }}</a>
+    {% endfor %}
+  </div>
+</div>
+
+{# ── Tabela de cálculo mensal ── #}
+<div class="card shadow-sm mb-4">
+  <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-calculator me-1"></i> Calculo mensal {{ year }}</span>
+    <div class="d-flex gap-2">
+      <a href="{{ url_for('export_excel', year=year) }}" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-file-earmark-excel me-1"></i>Excel
+      </a>
+      <a href="{{ url_for('export_pdf', year=year) }}" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-file-earmark-pdf me-1"></i>PDF
+      </a>
+    </div>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0 text-end">
+        <thead class="table-light">
+          <tr>
+            <th class="text-start ps-3">Mes</th>
+            <th>Normal</th><th>Day Trade</th><th>FII</th><th>Opcoes</th><th>Futuro</th>
+            <th>Base Normal</th><th>Base DT</th><th>Base FII</th>
+            <th>IRRF Comum</th><th>IRRF DT</th><th>IRRF FII</th>
+            <th class="pe-3 fw-bold">Imposto</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in calc_rows %}
+          <tr>
+            <td class="text-start ps-3 fw-semibold">{{ r.mes }}</td>
+            {% set cols = [
+              ('normal',      r.normal),      ('daytrade', r.daytrade),
+              ('fii',         r.fii),         ('opcoes',   r.opcoes),
+              ('futuro',      r.futuro),      ('base_normal', r.base_normal),
+              ('base_dt',     r.base_dt),     ('base_fii', r.base_fii),
+              ('irrf_comum',  r.irrf_comum),  ('irrf_dt',  r.irrf_dt),
+              ('irrf_fii',    r.irrf_fii),
+            ] %}
+            {% for col, val in cols %}
+            <td>
+              <a class="cell-link" href="{{ url_for('detalhe', year=year, month=r.month, column=col) }}">
+                {{ val | fmt }}
+              </a>
+            </td>
+            {% endfor %}
+            <td class="pe-3 fw-bold {{ 'text-danger' if r.imposto > 0 else '' }}">
+              <a class="cell-link {{ 'text-danger fw-bold' if r.imposto > 0 else '' }}"
+                 href="{{ url_for('detalhe', year=year, month=r.month, column='imposto') }}">
+                {{ r.imposto | fmt }}
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot class="table-light fw-bold">
+          <tr>
+            <td class="text-start ps-3">Total</td>
+            <td>{{ summary.normal | fmt }}</td>
+            <td>{{ summary.daytrade | fmt }}</td>
+            <td>{{ summary.fii | fmt }}</td>
+            <td>{{ summary.opcoes | fmt }}</td>
+            <td>{{ summary.futuro | fmt }}</td>
+            <td colspan="3"></td>
+            <td colspan="3"></td>
+            <td class="pe-3 {{ 'text-danger' if summary.imposto > 0 else '' }}">{{ summary.imposto | fmt }}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+</div>
+
+{# ── Posições atuais ── #}
+<div class="row g-4">
+
+  {# Ações #}
+  <div class="col-12 col-xl-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-header fw-semibold">
+        <i class="bi bi-bar-chart me-1"></i> Acoes ({{ acoes | length }})
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0 text-end">
+            <thead class="table-light">
+              <tr>
+                <th class="text-start ps-3">Ticker</th>
+                <th>Qtd</th><th>PM</th><th>Valor total</th><th class="pe-3">Corretora</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for p in acoes %}
+              <tr>
+                <td class="text-start ps-3 fw-semibold">{{ p.code }}</td>
+                <td>{{ p.qty | fmt_dec }}</td>
+                <td>{{ p.avg_price | fmt }}</td>
+                <td>{{ (p.qty * p.avg_price) | fmt }}</td>
+                <td class="pe-3 text-muted small">{{ p.broker or '-' }}</td>
+              </tr>
+              {% else %}
+              <tr><td colspan="5" class="text-center text-muted py-3">Sem posicoes em acoes.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# Fundos (FII) #}
+  <div class="col-12 col-xl-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-header fw-semibold">
+        <i class="bi bi-building me-1"></i> Fundos / FII ({{ fiis | length }})
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0 text-end">
+            <thead class="table-light">
+              <tr>
+                <th class="text-start ps-3">Ticker</th>
+                <th>Qtd</th><th>PM</th><th>Valor total</th><th class="pe-3">Corretora</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for p in fiis %}
+              <tr>
+                <td class="text-start ps-3 fw-semibold">{{ p.code }}</td>
+                <td>{{ p.qty | fmt_dec }}</td>
+                <td>{{ p.avg_price | fmt }}</td>
+                <td>{{ (p.qty * p.avg_price) | fmt }}</td>
+                <td class="pe-3 text-muted small">{{ p.broker or '-' }}</td>
+              </tr>
+              {% else %}
+              <tr><td colspan="5" class="text-center text-muted py-3">Sem posicoes em FII.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# Opcoes #}
+  <div class="col-12">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">
+        <i class="bi bi-arrow-left-right me-1"></i> Opcoes em aberto ({{ opcoes_pos | length }})
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0 text-end">
+            <thead class="table-light">
+              <tr>
+                <th class="text-start ps-3">Codigo</th>
+                <th>Vencimento</th><th>Qtd vendida</th><th>Qtd comprada</th>
+                <th>Premio liquido</th><th class="pe-3">Situacao</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for op in opcoes_pos %}
+              <tr>
+                <td class="text-start ps-3 fw-semibold">{{ op.codigo }}</td>
+                <td>{{ op.vencimento.strftime('%d/%m/%Y') if op.vencimento else '-' }}</td>
+                <td>{{ op.quantidade_vendida | fmt_dec }}</td>
+                <td>{{ op.quantidade_comprada | fmt_dec }}</td>
+                <td>{{ op.premio_liquido | fmt }}</td>
+                <td class="pe-3 text-muted small">
+                  <a href="{{ url_for('manual') }}" class="badge bg-warning text-dark text-decoration-none">
+                    <i class="bi bi-pencil me-1"></i>{{ op.situacao | truncate(40) }}
+                  </a>
+                </td>
+              </tr>
+              {% else %}
+              <tr><td colspan="6" class="text-center text-muted py-3">Sem opcoes em aberto.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

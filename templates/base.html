@@ -11,7 +11,7 @@
 <body>
   <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
     <div class="container-fluid">
-      <a class="navbar-brand fw-bold" href="{{ url_for('dashboard') }}">
+      <a class="navbar-brand fw-bold" href="{{ url_for('inicio') }}">
         <i class="bi bi-bar-chart-line-fill me-1"></i> IRSimple Web
       </a>
       <div class="d-flex align-items-center gap-2 ms-auto">
@@ -40,7 +40,8 @@
       <div class="collapse navbar-collapse mt-2 mt-lg-0" id="mainNav">
         <ul class="navbar-nav me-auto flex-wrap gap-1">
           {% set nav = [
-            ('dashboard', 'bi-house', 'Inicio'),
+            ('inicio',    'bi-house', 'Inicio'),
+            ('dashboard', 'bi-gear', 'Configuracao'),
             ('calculo',   'bi-calculator', 'Calculo mensal'),
             ('anual',     'bi-file-earmark-text', 'Declaracao anual'),
             ('historico', 'bi-clock-history', 'Historico'),

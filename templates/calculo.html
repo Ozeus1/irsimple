@@ -3,13 +3,15 @@
 {% macro detail_cell(r, column, value) -%}
   <a class="cell-link" href="{{ url_for('detalhe', year=year, month=r.month, column=column) }}">{{ fmt(value) }}</a>
 {%- endmacro %}
+
 <h1>Calculo mensal - {{ year }}</h1>
-<div class="toolbar">
-  {% for y in years %}<a class="button small" href="{{ url_for('calculo', year=y) }}">{{ y }}</a>{% endfor %}
-  <a class="button small" href="{{ url_for('export_excel', year=year) }}">Excel</a>
-  <a class="button small" href="{{ url_for('export_pdf', year=year) }}">PDF</a>
+<div class="toolbar mb-3">
+  {% for y in years %}<a class="btn btn-sm btn-outline-secondary me-1" href="{{ url_for('calculo', year=y) }}">{{ y }}</a>{% endfor %}
+  <a class="btn btn-sm btn-outline-secondary me-1" href="{{ url_for('export_excel', year=year) }}">Excel</a>
+  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('export_pdf', year=year) }}">PDF</a>
 </div>
-<section class="panel">
+
+<section class="panel mb-3">
   <table>
     <thead><tr><th>Mes</th><th>Normal</th><th>Day trade</th><th>FII</th><th>Opcoes</th><th>Futuro</th><th>Base normal</th><th>Base DT</th><th>Base FII</th><th>IRRF comum</th><th>IRRF DT</th><th>IRRF FII</th><th>Imposto</th></tr></thead>
     <tbody>
@@ -32,14 +34,53 @@
       {% endfor %}
     </tbody>
   </table>
-  <p class="hint">Clique em qualquer valor para abrir os registros que formaram o calculo daquele mes e coluna.</p>
+  <p class="hint mt-2">Clique em qualquer valor para abrir os registros que formaram o calculo daquele mes e coluna.</p>
 </section>
+
+{# --- Alertas collapsíveis --- #}
 <section class="panel">
-  <h2>Alertas</h2>
-  {% if warnings %}
-    <ol class="warnings">{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ol>
-  {% else %}
-    <p>Sem alertas criticos.</p>
-  {% endif %}
+  <div class="d-flex align-items-center justify-content-between" style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#alertas-body">
+    <h2 class="mb-0">
+      Alertas
+      {% if warnings %}
+        <span class="badge bg-warning text-dark ms-2">{{ warnings|length }}</span>
+      {% endif %}
+    </h2>
+    <i class="bi bi-chevron-down fs-5 text-muted" id="alertas-chevron"></i>
+  </div>
+
+  <div class="collapse show mt-3" id="alertas-body">
+    {% if warnings %}
+      <ol class="warnings mb-0">
+        {% for w in warnings %}
+        <li class="mb-2">
+          {# Extrai o código da opção/ativo para gerar link para Dados Manuais #}
+          {% set codigo = w | regex_search('codigo=([A-Z0-9]+)') %}
+          {{ w }}
+          {% if codigo %}
+            &mdash;
+            <a href="{{ url_for('opcoes') }}?highlight={{ codigo }}" class="badge bg-primary text-decoration-none">
+              <i class="bi bi-arrow-right-circle me-1"></i>Ver em Opcoes
+            </a>
+            <a href="{{ url_for('manual') }}?highlight={{ codigo }}" class="badge bg-secondary text-decoration-none">
+              <i class="bi bi-pencil-square me-1"></i>Registrar evento
+            </a>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ol>
+    {% else %}
+      <p class="text-muted mb-0">Sem alertas criticos.</p>
+    {% endif %}
+  </div>
 </section>
+
+<script>
+  const alertasBody = document.getElementById('alertas-body');
+  const chevron = document.getElementById('alertas-chevron');
+  if (alertasBody) {
+    alertasBody.addEventListener('show.bs.collapse', () => chevron.classList.replace('bi-chevron-right','bi-chevron-down'));
+    alertasBody.addEventListener('hide.bs.collapse', () => chevron.classList.replace('bi-chevron-down','bi-chevron-right'));
+  }
+</script>
 {% endblock %}
