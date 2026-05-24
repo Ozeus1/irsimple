@@ -236,7 +236,7 @@
         </div>
         <div class="modal-body">
           <p class="text-muted small mb-2">O arquivo deve ter as colunas abaixo (primeira linha = cabecalho):</p>
-          <pre class="bg-light rounded p-2 small mb-3" style="font-size:.78rem">Data,Protocolo,Corretora Origem,Conta Origem,Corretora Destino,Conta Destino,Ticker,Tipo de Ativo,Quantidade,Status,Observacao</pre>
+          <pre class="bg-light rounded p-2 small mb-3" style="font-size:.78rem">Data,Protocolo,Corretora Origem,Conta Origem,Corretora Destino,Conta Destino,Ticker,Quantidade,Tipo de Ativo,Status,Observacao</pre>
           <div class="mb-3">
             <label class="form-label fw-semibold">Arquivo CSV</label>
             <input type="file" class="form-control form-control-sm" name="csv_file" accept=".csv,.txt" required>
@@ -251,7 +251,8 @@
         <div class="modal-footer">
           <a href="data:text/csv;charset=utf-8,Data%2CProtocolo%2CCorretora%20Origem%2CConta%20Origem%2CCorretora%20Destino%2CConta%20Destino%2CTicker%2CTipo%20de%20Ativo%2CQuantidade%2CStatus%2CObservacao%0A2025-04-22%2C%2320250422211542066363%2CGENIAL%20INSTITUCIONAL%20CCTVM%2C7639235%2CTORO%20CTVM%20SA%2C1613418%2CHYPE3%2CAcoes%20-%20ON%2C20%2CFinalizado%2CHYPERA%20S.A."
              download="modelo_transferencias.csv"
-             class="btn btn-outline-secondary btn-sm me-auto">
+             class="btn btn-outline-secondary btn-sm me-auto"
+             id="btnModeloCSV">
             <i class="bi bi-download me-1"></i> Baixar modelo
           </a>
           <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
@@ -263,6 +264,17 @@
 </div>
 
 <script>
+// gera link de download do modelo CSV com a ordem correta de colunas
+(function() {
+  var header = "Data,Protocolo,Corretora Origem,Conta Origem,Corretora Destino,Conta Destino,Ticker,Quantidade,Tipo de Ativo,Status,Observacao";
+  var row    = "2025-04-22,#20250422211542066363,GENIAL INSTITUCIONAL CCTVM,7639235,TORO CTVM SA,1613418,HYPE3,100,Acoes - ON,Finalizado,HYPERA S.A.";
+  var csv    = header + "\n" + row;
+  var blob   = new Blob([csv], {type: "text/csv;charset=utf-8;"});
+  var url    = URL.createObjectURL(blob);
+  var btn    = document.getElementById("btnModeloCSV");
+  if (btn) btn.href = url;
+})();
+
 function editTransfer(id, date, protocol, brokerFrom, accountFrom, brokerTo, accountTo, ticker, assetType, quantity, status, obs) {
   document.getElementById('edit_id').value = id;
   document.getElementById('edit_transfer_date').value = date;
