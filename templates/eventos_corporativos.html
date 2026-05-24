@@ -114,9 +114,17 @@
             <td class="small">{{ r.broker_from or '-' }}</td>
             <td class="small">{{ r.broker_to or '-' }}</td>
             <td class="text-muted small">{{ r.obs or '' }}</td>
-            <td>
-              <form method="post" class="d-inline"
-                    onsubmit="return confirm('Excluir este evento?')">
+            <td class="text-nowrap">
+              <button class="btn btn-sm btn-outline-secondary me-1"
+                      onclick="editEvent({{ r.id }}, '{{ r.event_date }}', '{{ r.event_type }}',
+                        '{{ r.ticker or '' }}', '{{ r.ticker_new or '' }}', '{{ r.factor }}',
+                        '{{ r.bonus_qty }}', '{{ r.bonus_cost }}',
+                        '{{ (r.broker_from or '') | replace("'", "\\'") }}',
+                        '{{ (r.broker_to or '') | replace("'", "\\'") }}',
+                        '{{ (r.obs or '') | replace("'", "\\'") }}')">
+                <i class="bi bi-pencil"></i>
+              </button>
+              <form method="post" class="d-inline" onsubmit="return confirm('Excluir este evento?')">
                 <input type="hidden" name="action" value="delete">
                 <input type="hidden" name="item_id" value="{{ r.id }}">
                 <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
@@ -145,6 +153,77 @@
   </ul>
 </div>
 
+<!-- Modal de edicao -->
+<div class="modal fade" id="editEventModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form method="post">
+        <input type="hidden" name="action" value="edit">
+        <input type="hidden" name="item_id" id="eedit_id">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-pencil me-1"></i> Editar evento corporativo</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row g-2">
+            <div class="col-md-3">
+              <label class="form-label">Data <span class="text-danger">*</span></label>
+              <input type="date" class="form-control form-control-sm" name="event_date" id="eedit_date" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Tipo <span class="text-danger">*</span></label>
+              <select class="form-select form-select-sm" name="event_type" id="eedit_type" required onchange="toggleEditFields()">
+                <option value="split">Split / Desdobramento</option>
+                <option value="grupamento">Grupamento (inplit)</option>
+                <option value="bonificacao">Bonificacao / Subscricao</option>
+                <option value="fusao_corretora">Fusao / Aquisicao de Corretora</option>
+                <option value="renomeacao">Renomeacao de Ticker</option>
+                <option value="conversao">Conversao de Ativo</option>
+              </select>
+            </div>
+            <div class="col-md-2" id="efTicker">
+              <label class="form-label">Ticker</label>
+              <input type="text" class="form-control form-control-sm" name="ticker" id="eedit_ticker" style="text-transform:uppercase">
+            </div>
+            <div class="col-md-2" id="efTickerNew">
+              <label class="form-label">Ticker novo</label>
+              <input type="text" class="form-control form-control-sm" name="ticker_new" id="eedit_ticker_new" style="text-transform:uppercase">
+            </div>
+            <div class="col-md-2" id="efFactor">
+              <label class="form-label">Fator</label>
+              <input type="text" class="form-control form-control-sm" name="factor" id="eedit_factor">
+            </div>
+            <div class="col-md-2" id="efBonusQty">
+              <label class="form-label">Qtd bonus</label>
+              <input type="text" class="form-control form-control-sm" name="bonus_qty" id="eedit_bonus_qty">
+            </div>
+            <div class="col-md-2" id="efBonusCost">
+              <label class="form-label">Custo bonus</label>
+              <input type="text" class="form-control form-control-sm" name="bonus_cost" id="eedit_bonus_cost">
+            </div>
+            <div class="col-md-4" id="efBrokerFrom">
+              <label class="form-label">Corretora origem</label>
+              <input type="text" class="form-control form-control-sm" name="broker_from" id="eedit_broker_from">
+            </div>
+            <div class="col-md-4" id="efBrokerTo">
+              <label class="form-label">Corretora destino</label>
+              <input type="text" class="form-control form-control-sm" name="broker_to" id="eedit_broker_to">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Observacao</label>
+              <input type="text" class="form-control form-control-sm" name="obs" id="eedit_obs">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i>Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
 <script>
 function toggleFields() {
   var t = document.getElementById('evtType').value;
@@ -152,7 +231,6 @@ function toggleFields() {
   var isSplit = t === 'split' || t === 'grupamento';
   var isBonus = t === 'bonificacao';
   var isRename = t === 'renomeacao' || t === 'conversao';
-
   document.getElementById('fTicker').style.display     = isFusao ? 'none' : '';
   document.getElementById('fTickerNew').style.display  = isRename ? '' : 'none';
   document.getElementById('fFactor').style.display     = (isSplit || isBonus) ? '' : 'none';
@@ -162,5 +240,36 @@ function toggleFields() {
   document.getElementById('fBrokerTo').style.display   = isFusao ? '' : 'none';
 }
 toggleFields();
+
+function toggleEditFields() {
+  var t = document.getElementById('eedit_type').value;
+  var isFusao = t === 'fusao_corretora';
+  var isSplit = t === 'split' || t === 'grupamento';
+  var isBonus = t === 'bonificacao';
+  var isRename = t === 'renomeacao' || t === 'conversao';
+  document.getElementById('efTicker').style.display     = isFusao ? 'none' : '';
+  document.getElementById('efTickerNew').style.display  = isRename ? '' : 'none';
+  document.getElementById('efFactor').style.display     = (isSplit || isBonus) ? '' : 'none';
+  document.getElementById('efBonusQty').style.display   = isBonus ? '' : 'none';
+  document.getElementById('efBonusCost').style.display  = isBonus ? '' : 'none';
+  document.getElementById('efBrokerFrom').style.display = isFusao ? '' : 'none';
+  document.getElementById('efBrokerTo').style.display   = isFusao ? '' : 'none';
+}
+
+function editEvent(id, date, type, ticker, tickerNew, factor, bonusQty, bonusCost, brokerFrom, brokerTo, obs) {
+  document.getElementById('eedit_id').value          = id;
+  document.getElementById('eedit_date').value        = date;
+  document.getElementById('eedit_type').value        = type;
+  document.getElementById('eedit_ticker').value      = ticker;
+  document.getElementById('eedit_ticker_new').value  = tickerNew;
+  document.getElementById('eedit_factor').value      = factor;
+  document.getElementById('eedit_bonus_qty').value   = bonusQty;
+  document.getElementById('eedit_bonus_cost').value  = bonusCost;
+  document.getElementById('eedit_broker_from').value = brokerFrom;
+  document.getElementById('eedit_broker_to').value   = brokerTo;
+  document.getElementById('eedit_obs').value         = obs;
+  toggleEditFields();
+  new bootstrap.Modal(document.getElementById('editEventModal')).show();
+}
 </script>
 {% endblock %}

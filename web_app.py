@@ -1840,6 +1840,30 @@ def transferencias() -> str | Response:
             with core.db_connect() as conn:
                 conn.execute("DELETE FROM custody_transfers WHERE id = ? AND user_id = ?", (item_id, uid))
             flash("Transferencia excluida.", "success")
+        elif action == "edit":
+            item_id = int(request.form.get("item_id", 0))
+            with core.db_connect() as conn:
+                conn.execute(
+                    """UPDATE custody_transfers SET
+                       transfer_date=?, protocol=?, broker_from=?, account_from=?,
+                       broker_to=?, account_to=?, ticker=?, asset_type=?, quantity=?, status=?, obs=?
+                       WHERE id=? AND user_id=?""",
+                    (
+                        request.form.get("transfer_date", ""),
+                        request.form.get("protocol", ""),
+                        request.form.get("broker_from", ""),
+                        request.form.get("account_from", ""),
+                        request.form.get("broker_to", ""),
+                        request.form.get("account_to", ""),
+                        request.form.get("ticker", "").upper().strip(),
+                        request.form.get("asset_type", ""),
+                        request.form.get("quantity", "0"),
+                        request.form.get("status", "finalizado"),
+                        request.form.get("obs", ""),
+                        item_id, uid,
+                    ),
+                )
+            flash("Transferencia atualizada.", "success")
         else:
             with core.db_connect() as conn:
                 conn.execute(
@@ -1884,6 +1908,29 @@ def eventos_corporativos() -> str | Response:
             with core.db_connect() as conn:
                 conn.execute("DELETE FROM corporate_events WHERE id = ? AND user_id = ?", (item_id, uid))
             flash("Evento excluido.", "success")
+        elif action == "edit":
+            item_id = int(request.form.get("item_id", 0))
+            with core.db_connect() as conn:
+                conn.execute(
+                    """UPDATE corporate_events SET
+                       event_date=?, event_type=?, ticker=?, ticker_new=?, factor=?,
+                       bonus_qty=?, bonus_cost=?, broker_from=?, broker_to=?, obs=?
+                       WHERE id=? AND user_id=?""",
+                    (
+                        request.form.get("event_date", ""),
+                        request.form.get("event_type", ""),
+                        request.form.get("ticker", "").upper().strip(),
+                        request.form.get("ticker_new", "").upper().strip(),
+                        request.form.get("factor", "1"),
+                        request.form.get("bonus_qty", "0"),
+                        request.form.get("bonus_cost", "0"),
+                        request.form.get("broker_from", ""),
+                        request.form.get("broker_to", ""),
+                        request.form.get("obs", ""),
+                        item_id, uid,
+                    ),
+                )
+            flash("Evento atualizado.", "success")
         else:
             with core.db_connect() as conn:
                 conn.execute(

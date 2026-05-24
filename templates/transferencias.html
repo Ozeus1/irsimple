@@ -106,9 +106,16 @@
               </span>
             </td>
             <td class="text-muted small">{{ r.obs or '' }}</td>
-            <td>
-              <form method="post" class="d-inline"
-                    onsubmit="return confirm('Excluir esta transferencia?')">
+            <td class="text-nowrap">
+              <button class="btn btn-sm btn-outline-secondary me-1"
+                      onclick="editTransfer({{ r.id }}, '{{ r.transfer_date }}', '{{ r.protocol or '' }}',
+                        '{{ r.broker_from or '' }}', '{{ r.account_from or '' }}',
+                        '{{ r.broker_to or '' }}', '{{ r.account_to or '' }}',
+                        '{{ r.ticker }}', '{{ r.asset_type or 'Acoes - ON' }}',
+                        '{{ r.quantity }}', '{{ r.status or 'finalizado' }}', '{{ r.obs or '' }}')">
+                <i class="bi bi-pencil"></i>
+              </button>
+              <form method="post" class="d-inline" onsubmit="return confirm('Excluir esta transferencia?')">
                 <input type="hidden" name="action" value="delete">
                 <input type="hidden" name="item_id" value="{{ r.id }}">
                 <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
@@ -130,4 +137,103 @@
   Para portabilidades com muitos ativos (como as imagens B3), registre um item por ticker.
   O protocolo B3 e opcional mas ajuda a rastrear.
 </div>
+
+<!-- Modal de edicao -->
+<div class="modal fade" id="editModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form method="post">
+        <input type="hidden" name="action" value="edit">
+        <input type="hidden" name="item_id" id="edit_id">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-pencil me-1"></i> Editar transferencia</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row g-2">
+            <div class="col-md-3">
+              <label class="form-label">Data <span class="text-danger">*</span></label>
+              <input type="date" class="form-control form-control-sm" name="transfer_date" id="edit_transfer_date" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Protocolo B3</label>
+              <input type="text" class="form-control form-control-sm" name="protocol" id="edit_protocol">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Corretora origem</label>
+              <input type="text" class="form-control form-control-sm" name="broker_from" id="edit_broker_from">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Conta origem</label>
+              <input type="text" class="form-control form-control-sm" name="account_from" id="edit_account_from">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Corretora destino</label>
+              <input type="text" class="form-control form-control-sm" name="broker_to" id="edit_broker_to">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Conta destino</label>
+              <input type="text" class="form-control form-control-sm" name="account_to" id="edit_account_to">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label">Ticker <span class="text-danger">*</span></label>
+              <input type="text" class="form-control form-control-sm" name="ticker" id="edit_ticker" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Tipo de ativo</label>
+              <select class="form-select form-select-sm" name="asset_type" id="edit_asset_type">
+                <option value="Acoes - ON">Acoes - ON</option>
+                <option value="Acoes - PN">Acoes - PN</option>
+                <option value="Acoes - UNIT">Acoes - UNIT</option>
+                <option value="FII - Cotas">FII - Cotas</option>
+                <option value="ETF">ETF</option>
+                <option value="BDR">BDR</option>
+                <option value="Opcoes">Opcoes</option>
+                <option value="Outro">Outro</option>
+              </select>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label">Quantidade <span class="text-danger">*</span></label>
+              <input type="text" class="form-control form-control-sm" name="quantity" id="edit_quantity" required>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label">Status</label>
+              <select class="form-select form-select-sm" name="status" id="edit_status">
+                <option value="finalizado">Finalizado</option>
+                <option value="pendente">Pendente</option>
+                <option value="cancelado">Cancelado</option>
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Observacao</label>
+              <input type="text" class="form-control form-control-sm" name="obs" id="edit_obs">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i>Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+function editTransfer(id, date, protocol, brokerFrom, accountFrom, brokerTo, accountTo, ticker, assetType, quantity, status, obs) {
+  document.getElementById('edit_id').value = id;
+  document.getElementById('edit_transfer_date').value = date;
+  document.getElementById('edit_protocol').value = protocol;
+  document.getElementById('edit_broker_from').value = brokerFrom;
+  document.getElementById('edit_account_from').value = accountFrom;
+  document.getElementById('edit_broker_to').value = brokerTo;
+  document.getElementById('edit_account_to').value = accountTo;
+  document.getElementById('edit_ticker').value = ticker;
+  document.getElementById('edit_asset_type').value = assetType;
+  document.getElementById('edit_quantity').value = quantity;
+  document.getElementById('edit_status').value = status;
+  document.getElementById('edit_obs').value = obs;
+  new bootstrap.Modal(document.getElementById('editModal')).show();
+}
+</script>
 {% endblock %}

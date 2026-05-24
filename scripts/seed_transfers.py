@@ -2,6 +2,10 @@
 """
 Popula custody_transfers e corporate_events no banco de producao.
 Execute no servidor: python3 scripts/seed_transfers.py
+
+Modo de operacao:
+  - Apaga todos os registros existentes deste usuario e reinicia do zero.
+  - Rode quantas vezes quiser — e idempotente.
 """
 import sqlite3
 import sys
@@ -12,6 +16,11 @@ DB_FILE = BASE_DIR / "irsimple.db"
 
 conn = sqlite3.connect(str(DB_FILE))
 conn.row_factory = sqlite3.Row
+
+# Garante que as tabelas existam
+sys.path.insert(0, str(BASE_DIR))
+import irsimple_app as core
+core.init_db()
 
 # Descobre user_id do admin (orlei)
 user = conn.execute(
@@ -25,10 +34,10 @@ if not user:
 uid = user["id"]
 print(f"Usando user_id = {uid}")
 
-# ── Chama init_db via irsimple_app para garantir que as tabelas existam ──────
-sys.path.insert(0, str(BASE_DIR))
-import irsimple_app as core
-core.init_db()
+# ── Limpa registros existentes para recriar do zero ──────────────────────────
+conn.execute("DELETE FROM custody_transfers WHERE user_id = ?", (uid,))
+conn.execute("DELETE FROM corporate_events WHERE user_id = ?", (uid,))
+print("Registros anteriores removidos.")
 
 # ── 1. Evento corporativo: Banco Modal → XP em 30/08/2023 ────────────────────
 corp_events = [
@@ -131,15 +140,7 @@ custody_transfers = [
 ]
 
 # ── Insere eventos corporativos ───────────────────────────────────────────────
-inserted_corp = 0
 for ev in corp_events:
-    exists = conn.execute(
-        "SELECT 1 FROM corporate_events WHERE user_id=? AND event_date=? AND event_type=? AND broker_from=?",
-        (uid, ev["event_date"], ev["event_type"], ev["broker_from"]),
-    ).fetchone()
-    if exists:
-        print(f"  [SKIP] Evento corporativo {ev['event_date']} {ev['event_type']} ja existe")
-        continue
     conn.execute(
         """INSERT INTO corporate_events
            (user_id, event_date, event_type, ticker, ticker_new, factor,
@@ -149,19 +150,10 @@ for ev in corp_events:
          ev["factor"], ev["bonus_qty"], ev["bonus_cost"],
          ev["broker_from"], ev["broker_to"], ev["obs"]),
     )
-    inserted_corp += 1
     print(f"  [OK] Evento corporativo: {ev['event_date']} {ev['event_type']} {ev['broker_from']} -> {ev['broker_to']}")
 
 # ── Insere transferencias de custodia ─────────────────────────────────────────
-inserted_tr = 0
 for tr in custody_transfers:
-    exists = conn.execute(
-        "SELECT 1 FROM custody_transfers WHERE user_id=? AND transfer_date=? AND ticker=? AND protocol=?",
-        (uid, tr["transfer_date"], tr["ticker"], tr["protocol"]),
-    ).fetchone()
-    if exists:
-        print(f"  [SKIP] Transferencia {tr['transfer_date']} {tr['ticker']} ja existe")
-        continue
     conn.execute(
         """INSERT INTO custody_transfers
            (user_id, transfer_date, protocol, broker_from, account_from,
@@ -173,9 +165,8 @@ for tr in custody_transfers:
          tr["ticker"], tr["asset_type"], tr["quantity"],
          tr["status"], tr["obs"]),
     )
-    inserted_tr += 1
     print(f"  [OK] Transferencia: {tr['transfer_date']} {tr['ticker']} {tr['quantity']} {tr['broker_from']} -> {tr['broker_to']}")
 
 conn.commit()
 conn.close()
-print(f"\nConcluido: {inserted_corp} eventos corporativos, {inserted_tr} transferencias inseridas.")
+print(f"\nConcluido: {len(corp_events)} eventos corporativos, {len(custody_transfers)} transferencias inseridas.")
