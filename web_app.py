@@ -1675,6 +1675,16 @@ def inicio() -> str:
 @app.route("/posicao/<ticker>")
 @login_required
 def posicao_ticker(ticker: str) -> str:
+    def _safe(row: Any, *keys: str, default: str = "") -> str:
+        for k in keys:
+            try:
+                v = row[k]
+                if v is not None:
+                    return str(v)
+            except (KeyError, IndexError):
+                pass
+        return default
+
     ticker = core.normalize_ticker(ticker)
     uid = current_user_id()
     results = calculate_all()
@@ -1682,30 +1692,24 @@ def posicao_ticker(ticker: str) -> str:
     if year not in results:
         year = max(results) if results else date.today().year
 
-    # posicao final no ano selecionado
     result = results.get(year)
-    pos_final = (result.positions.get(ticker) if result else None)
+    pos_final = result.positions.get(ticker) if result else None
 
-    # todos os trades do ativo (todos os anos, ordem cronologica)
     all_trades = db_rows(
         "SELECT * FROM trades WHERE user_id=? AND code=? ORDER BY dt, id",
         (uid, ticker),
     )
 
-    # transferencias de custodia do ativo
     core.init_db()
     transfers = db_rows(
         "SELECT * FROM custody_transfers WHERE user_id=? AND ticker=? ORDER BY transfer_date, id",
         (uid, ticker),
     )
-
-    # eventos corporativos que afetam o ativo (por ticker ou fusao de corretora)
     corp_events = db_rows(
         "SELECT * FROM corporate_events WHERE user_id=? AND (ticker=? OR event_type IN ('fusao_corretora','aquisicao_corretora')) ORDER BY event_date, id",
         (uid, ticker),
     )
 
-    # reconstroi saldo acumulado trade a trade
     timeline: list[dict] = []
     qty_acc = Decimal("0")
     cost_acc = Decimal("0")
@@ -1713,90 +1717,101 @@ def posicao_ticker(ticker: str) -> str:
     # posicao inicial (carry antes do start_year)
     cfg = app_config()
     start_year = int(cfg.get("start_year") or date.today().year - 1)
-    init_positions = load_positions()
-    init_pos = next((p for p in init_positions if core.normalize_ticker(p.code) == ticker), None)
-    if init_pos:
-        qty_acc = core.money(init_pos.qty)
-        cost_acc = q2(core.money(init_pos.cost))
-        timeline.append({
-            "date": f"antes de {start_year}",
-            "type": "posicao_inicial",
-            "side": "-",
-            "qty": qty_acc,
-            "price": q2(cost_acc / qty_acc) if qty_acc else Decimal("0"),
-            "value": cost_acc,
-            "broker": init_pos.broker or "-",
-            "saldo_qty": qty_acc,
-            "saldo_pm": q2(cost_acc / qty_acc) if qty_acc else Decimal("0"),
-            "saldo_custo": cost_acc,
-            "obs": "Posicao inicial importada",
-        })
+    try:
+        init_positions = load_positions()
+        init_pos = next((p for p in init_positions if core.normalize_ticker(getattr(p, "code", "") or "") == ticker), None)
+        if init_pos:
+            qty_acc = q2(core.money(getattr(init_pos, "qty", 0) or 0))
+            cost_acc = q2(core.money(getattr(init_pos, "cost", 0) or 0))
+            pm0 = q2(cost_acc / qty_acc) if qty_acc else Decimal("0")
+            timeline.append({
+                "date": f"antes de {start_year}",
+                "type": "posicao_inicial",
+                "side": "-",
+                "qty": qty_acc,
+                "price": pm0,
+                "value": cost_acc,
+                "broker": getattr(init_pos, "broker", None) or "-",
+                "saldo_qty": qty_acc,
+                "saldo_pm": pm0,
+                "saldo_custo": cost_acc,
+                "obs": "Posicao inicial importada",
+            })
+    except Exception:
+        pass
 
     for row in all_trades:
-        dt = str(row["dt"])
-        side = str(row["side"] or "").lower()
-        qty = core.money(row["qty"])
-        price = core.money(row["price"])
-        value = core.money(row["value"])
-        broker = str(row["broker"] or "-")
+        try:
+            dt = _safe(row, "dt")
+            side = _safe(row, "side").lower()
+            qty = q2(core.money(_safe(row, "qty", default="0")))
+            price = q2(core.money(_safe(row, "price", default="0")))
+            value = q2(core.money(_safe(row, "value", default="0")))
+            broker = _safe(row, "broker", default="-")
 
-        if "compra" in side or side == "c":
-            cost_acc = q2(cost_acc + value)
-            qty_acc = q2(qty_acc + qty)
-        else:
-            if qty_acc > 0:
+            if "compra" in side or side == "c":
+                cost_acc = q2(cost_acc + value)
+                qty_acc = q2(qty_acc + qty)
+            elif qty_acc > 0:
                 avg = q2(cost_acc / qty_acc)
                 cost_acc = q2(max(Decimal("0"), cost_acc - avg * min(qty, qty_acc)))
                 qty_acc = q2(max(Decimal("0"), qty_acc - qty))
 
-        pm = q2(cost_acc / qty_acc) if qty_acc > 0 else Decimal("0")
-        timeline.append({
-            "date": dt,
-            "type": "trade",
-            "side": side,
-            "qty": qty,
-            "price": price,
-            "value": value,
-            "broker": broker,
-            "saldo_qty": qty_acc,
-            "saldo_pm": pm,
-            "saldo_custo": cost_acc,
-            "obs": str(row.get("market") or row.get("category") or ""),
-        })
+            pm = q2(cost_acc / qty_acc) if qty_acc > 0 else Decimal("0")
+            obs = _safe(row, "market") or _safe(row, "category")
+            timeline.append({
+                "date": dt,
+                "type": "trade",
+                "side": side,
+                "qty": qty,
+                "price": price,
+                "value": value,
+                "broker": broker,
+                "saldo_qty": qty_acc,
+                "saldo_pm": pm,
+                "saldo_custo": cost_acc,
+                "obs": obs,
+            })
+        except Exception:
+            continue
 
-    # acrescenta transferencias e eventos corporativos como linhas informativas
     for row in transfers:
-        timeline.append({
-            "date": str(row["transfer_date"]),
-            "type": "transferencia",
-            "side": "->",
-            "qty": core.money(row["quantity"] or "0"),
-            "price": Decimal("0"),
-            "value": Decimal("0"),
-            "broker": f'{row["broker_from"] or "?"} → {row["broker_to"] or "?"}',
-            "saldo_qty": None,
-            "saldo_pm": None,
-            "saldo_custo": None,
-            "obs": str(row["obs"] or ""),
-        })
+        try:
+            timeline.append({
+                "date": _safe(row, "transfer_date"),
+                "type": "transferencia",
+                "side": "->",
+                "qty": q2(core.money(_safe(row, "quantity", default="0"))),
+                "price": Decimal("0"),
+                "value": Decimal("0"),
+                "broker": f'{_safe(row, "broker_from", default="?")} → {_safe(row, "broker_to", default="?")}',
+                "saldo_qty": None,
+                "saldo_pm": None,
+                "saldo_custo": None,
+                "obs": _safe(row, "obs"),
+            })
+        except Exception:
+            continue
 
     for row in corp_events:
-        timeline.append({
-            "date": str(row["event_date"]),
-            "type": "evento_corp",
-            "side": "ev",
-            "qty": Decimal("0"),
-            "price": Decimal("0"),
-            "value": Decimal("0"),
-            "broker": f'{row["broker_from"] or row["ticker"] or ""}',
-            "saldo_qty": None,
-            "saldo_pm": None,
-            "saldo_custo": None,
-            "obs": f'{row["event_type"]}: {row["obs"] or ""}',
-        })
+        try:
+            timeline.append({
+                "date": _safe(row, "event_date"),
+                "type": "evento_corp",
+                "side": "ev",
+                "qty": Decimal("0"),
+                "price": Decimal("0"),
+                "value": Decimal("0"),
+                "broker": _safe(row, "broker_from") or _safe(row, "ticker"),
+                "saldo_qty": None,
+                "saldo_pm": None,
+                "saldo_custo": None,
+                "obs": f'{_safe(row, "event_type")}: {_safe(row, "obs")}',
+            })
+        except Exception:
+            continue
 
-    # ordena timeline por data (strings ISO ordenam corretamente)
-    timeline.sort(key=lambda x: (x["date"] if x["date"][0].isdigit() else "0000"))
+    timeline.sort(key=lambda x: x["date"] if x["date"][:1].isdigit() else "0000")
 
     return render_template(
         "posicao_ticker.html",
