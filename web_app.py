@@ -1672,9 +1672,82 @@ def inicio() -> str:
     )
 
 
-@app.route("/posicao/<ticker>")
+@app.route("/posicao/<ticker>", methods=["GET", "POST"])
 @login_required
 def posicao_ticker(ticker: str) -> str:
+    ticker_norm = core.normalize_ticker(ticker)
+    uid = current_user_id()
+    year_arg = request.args.get("year")
+
+    if request.method == "POST":
+        action = request.form.get("action", "")
+        core.init_db()
+        try:
+            if action == "add_trade":
+                dt = request.form.get("dt", "").strip()
+                side = request.form.get("side", "compra").strip().lower()
+                qty_s = request.form.get("qty", "0").strip().replace(",", ".")
+                price_s = request.form.get("price", "0").strip().replace(",", ".")
+                broker = request.form.get("broker", "").strip()
+                market = request.form.get("market", "normal").strip()
+                qty_d = core.money(qty_s)
+                price_d = core.money(price_s)
+                value_d = qty_d * price_d
+                with core.db_connect() as conn:
+                    conn.execute(
+                        "INSERT INTO trades (user_id,dt,side,market,broker,code,qty,price,value,category) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (uid, dt, side, market, broker, ticker_norm,
+                         str(qty_d), str(price_d), str(value_d), market),
+                    )
+                flash(f"Negocio {'compra' if 'compra' in side else 'venda'} inserido em {dt}.", "success")
+
+            elif action == "add_transfer":
+                dt = request.form.get("dt", "").strip()
+                broker_from = request.form.get("broker_from", "").strip()
+                account_from = request.form.get("account_from", "").strip()
+                broker_to = request.form.get("broker_to", "").strip()
+                account_to = request.form.get("account_to", "").strip()
+                qty_s = request.form.get("quantity", "0").strip().replace(",", ".")
+                protocol = request.form.get("protocol", "").strip()
+                obs = request.form.get("obs", "").strip()
+                with core.db_connect() as conn:
+                    conn.execute(
+                        """INSERT INTO custody_transfers
+                           (user_id,transfer_date,protocol,broker_from,account_from,
+                            broker_to,account_to,ticker,asset_type,quantity,status,obs)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (uid, dt, protocol, broker_from, account_from,
+                         broker_to, account_to, ticker_norm, "Acoes", qty_s, "finalizado", obs),
+                    )
+                flash(f"Portabilidade {ticker_norm} inserida em {dt}.", "success")
+
+            elif action == "add_corp_event":
+                dt = request.form.get("dt", "").strip()
+                event_type = request.form.get("event_type", "renomeacao").strip()
+                ticker_new = request.form.get("ticker_new", "").strip().upper()
+                factor = request.form.get("factor", "1").strip().replace(",", ".")
+                bonus_qty = request.form.get("bonus_qty", "0").strip().replace(",", ".")
+                bonus_cost = request.form.get("bonus_cost", "0").strip().replace(",", ".")
+                obs = request.form.get("obs", "").strip()
+                with core.db_connect() as conn:
+                    conn.execute(
+                        """INSERT INTO corporate_events
+                           (user_id,event_date,event_type,ticker,ticker_new,factor,
+                            bonus_qty,bonus_cost,broker_from,broker_to,obs)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                        (uid, dt, event_type, ticker_norm, ticker_new, factor,
+                         bonus_qty, bonus_cost, "", "", obs),
+                    )
+                flash(f"Evento corporativo {event_type} inserido em {dt}.", "success")
+
+        except Exception as exc:
+            flash(f"Erro ao salvar: {exc}", "danger")
+
+        redir = url_for("posicao_ticker", ticker=ticker_norm)
+        if year_arg:
+            redir += f"?year={year_arg}"
+        return redirect(redir)
+
     def _safe(row: Any, *keys: str, default: str = "") -> str:
         for k in keys:
             try:
@@ -1685,10 +1758,9 @@ def posicao_ticker(ticker: str) -> str:
                 pass
         return default
 
-    ticker = core.normalize_ticker(ticker)
-    uid = current_user_id()
+    ticker = ticker_norm
     results = calculate_all()
-    year = int(request.args.get("year") or (selected_year(results) if results else date.today().year))
+    year = int(year_arg or (selected_year(results) if results else date.today().year))
     if year not in results:
         year = max(results) if results else date.today().year
 
@@ -1820,6 +1892,7 @@ def posicao_ticker(ticker: str) -> str:
         years=sorted(results),
         pos_final=pos_final,
         timeline=timeline,
+        today=date.today().isoformat(),
     )
 
 

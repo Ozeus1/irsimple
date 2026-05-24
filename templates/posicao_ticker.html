@@ -14,7 +14,10 @@
     <a class="btn btn-sm {{ 'btn-primary' if y == year else 'btn-outline-secondary' }}"
        href="{{ url_for('posicao_ticker', ticker=ticker, year=y) }}">{{ y }}</a>
     {% endfor %}
-    <a href="{{ url_for('inicio', year=year) }}" class="btn btn-sm btn-outline-secondary ms-2">
+    <button class="btn btn-sm btn-success ms-2" onclick="openAddModal()">
+      <i class="bi bi-plus-circle me-1"></i>Inserir evento
+    </button>
+    <a href="{{ url_for('inicio', year=year) }}" class="btn btn-sm btn-outline-secondary">
       <i class="bi bi-arrow-left me-1"></i>Voltar
     </a>
   </div>
@@ -148,5 +151,236 @@
     </div>
   </div>
 </div>
+
+{# ── Modal inserir evento ── #}
+<div class="modal fade" id="addEventModal" tabindex="-1" aria-labelledby="addEventModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="addEventModalLabel">
+          <i class="bi bi-plus-circle me-2"></i>Inserir evento — {{ ticker }}
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+
+      {# ── selector de tipo ── #}
+      <div class="modal-body pb-0">
+        <div class="d-flex gap-2 flex-wrap mb-3" id="typeSelector">
+          <button type="button" class="btn btn-outline-success btn-sm type-btn active" data-type="compra"
+                  onclick="selectType('compra')"><i class="bi bi-arrow-down-circle me-1"></i>Compra</button>
+          <button type="button" class="btn btn-outline-danger btn-sm type-btn" data-type="venda"
+                  onclick="selectType('venda')"><i class="bi bi-arrow-up-circle me-1"></i>Venda</button>
+          <button type="button" class="btn btn-outline-info btn-sm type-btn" data-type="portabilidade"
+                  onclick="selectType('portabilidade')"><i class="bi bi-shuffle me-1"></i>Portabilidade B3</button>
+          <button type="button" class="btn btn-outline-warning btn-sm type-btn" data-type="renomeacao"
+                  onclick="selectType('renomeacao')"><i class="bi bi-pencil-square me-1"></i>Ev. Corporativo</button>
+        </div>
+      </div>
+
+      {# ── form compra / venda ── #}
+      <form method="post" id="formTrade" class="event-form"
+            action="{{ url_for('posicao_ticker', ticker=ticker, year=year) }}">
+        <input type="hidden" name="action" value="add_trade">
+        <input type="hidden" name="side" id="tradeSide" value="compra">
+        <div class="modal-body pt-0">
+          <div class="row g-2">
+            <div class="col-md-3">
+              <label class="form-label fw-semibold">Data</label>
+              <input type="date" name="dt" class="form-control form-control-sm" value="{{ today }}" required>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-semibold">Quantidade</label>
+              <input type="text" name="qty" class="form-control form-control-sm" placeholder="100" required>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-semibold">Preco unit.</label>
+              <input type="text" name="price" class="form-control form-control-sm" placeholder="0.00" required>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-semibold">Mercado</label>
+              <select name="market" class="form-select form-select-sm">
+                <option value="normal">Normal</option>
+                <option value="fracionario">Fracionario</option>
+                <option value="day_trade">Day Trade</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-semibold">Corretora</label>
+              <input type="text" name="broker" class="form-control form-control-sm"
+                     placeholder="Ex: BANCO BTG PACTUAL S/A - 11941614"
+                     list="brokerSuggestions">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button type="submit" class="btn btn-success btn-sm" id="tradeSaveBtn">
+            <i class="bi bi-check-circle me-1"></i>Salvar Compra
+          </button>
+        </div>
+      </form>
+
+      {# ── form portabilidade ── #}
+      <form method="post" id="formTransfer" class="event-form d-none"
+            action="{{ url_for('posicao_ticker', ticker=ticker, year=year) }}">
+        <input type="hidden" name="action" value="add_transfer">
+        <div class="modal-body pt-0">
+          <div class="row g-2">
+            <div class="col-md-3">
+              <label class="form-label fw-semibold">Data</label>
+              <input type="date" name="dt" class="form-control form-control-sm" value="{{ today }}" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-semibold">Protocolo B3</label>
+              <input type="text" name="protocol" class="form-control form-control-sm" placeholder="#2025...">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-semibold">Quantidade</label>
+              <input type="text" name="quantity" class="form-control form-control-sm" placeholder="0">
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label fw-semibold">Corretora origem</label>
+              <input type="text" name="broker_from" class="form-control form-control-sm"
+                     placeholder="Ex: XP INVESTIMENTOS CCTVM S/A" list="brokerSuggestions">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-semibold">Conta origem</label>
+              <input type="text" name="account_from" class="form-control form-control-sm" placeholder="12345678">
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label fw-semibold">Corretora destino</label>
+              <input type="text" name="broker_to" class="form-control form-control-sm"
+                     placeholder="Ex: BANCO BTG PACTUAL S/A" list="brokerSuggestions">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-semibold">Conta destino</label>
+              <input type="text" name="account_to" class="form-control form-control-sm" placeholder="11941614">
+            </div>
+            <div class="col-12">
+              <label class="form-label fw-semibold">Observacao</label>
+              <input type="text" name="obs" class="form-control form-control-sm"
+                     placeholder="{{ ticker }} — descricao da transferencia">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button type="submit" class="btn btn-info btn-sm text-dark">
+            <i class="bi bi-shuffle me-1"></i>Salvar Portabilidade
+          </button>
+        </div>
+      </form>
+
+      {# ── form evento corporativo ── #}
+      <form method="post" id="formCorpEvent" class="event-form d-none"
+            action="{{ url_for('posicao_ticker', ticker=ticker, year=year) }}">
+        <input type="hidden" name="action" value="add_corp_event">
+        <div class="modal-body pt-0">
+          <div class="row g-2">
+            <div class="col-md-3">
+              <label class="form-label fw-semibold">Data</label>
+              <input type="date" name="dt" class="form-control form-control-sm" value="{{ today }}" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-semibold">Tipo</label>
+              <select name="event_type" class="form-select form-select-sm" onchange="toggleCorpFields(this)">
+                <option value="renomeacao">Renomeacao (mudanca de ticker)</option>
+                <option value="desdobramento">Desdobramento (split)</option>
+                <option value="agrupamento">Agrupamento (inplit)</option>
+                <option value="incorporacao">Incorporacao</option>
+                <option value="bonificacao">Bonificacao</option>
+                <option value="fusao_corretora">Fusao de corretoras</option>
+                <option value="aquisicao_corretora">Aquisicao de corretora</option>
+              </select>
+            </div>
+            <div class="col-md-3" id="corpTickerNewWrap">
+              <label class="form-label fw-semibold">Novo ticker</label>
+              <input type="text" name="ticker_new" class="form-control form-control-sm"
+                     placeholder="Ex: BBAS3" style="text-transform:uppercase">
+            </div>
+            <div class="col-md-2" id="corpFactorWrap">
+              <label class="form-label fw-semibold">Fator</label>
+              <input type="text" name="factor" class="form-control form-control-sm" value="1"
+                     placeholder="1">
+            </div>
+            <div class="col-md-2 d-none" id="corpBonusQtyWrap">
+              <label class="form-label fw-semibold">Qtd bonus</label>
+              <input type="text" name="bonus_qty" class="form-control form-control-sm" value="0">
+            </div>
+            <div class="col-md-2 d-none" id="corpBonusCostWrap">
+              <label class="form-label fw-semibold">Custo bonus</label>
+              <input type="text" name="bonus_cost" class="form-control form-control-sm" value="0">
+            </div>
+            <div class="col-12">
+              <label class="form-label fw-semibold">Observacao</label>
+              <input type="text" name="obs" class="form-control form-control-sm"
+                     placeholder="Descricao do evento corporativo">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button type="submit" class="btn btn-warning btn-sm">
+            <i class="bi bi-pencil-square me-1"></i>Salvar Evento
+          </button>
+        </div>
+      </form>
+
+    </div>{# /modal-content #}
+  </div>
+</div>
+
+{# datalist autocomplete para corretoras #}
+<datalist id="brokerSuggestions">
+  <option value="BANCO BTG PACTUAL S/A">
+  <option value="XP INVESTIMENTOS CCTVM S/A">
+  <option value="TORO CTVM SA">
+  <option value="CM CAPITAL MARKETS CORR.">
+  <option value="CLEAR CORRETORA - GRUPO XP">
+  <option value="MODAL DTVM LTDA">
+  <option value="GENIAL INVESTIMENTOS CVC S/A">
+  <option value="NU INVEST CORRETORA DE VALORES S.A.">
+  <option value="INTER DTVM LTDA">
+  <option value="RICO INVESTIMENTOS - GRUPO XP">
+</datalist>
+
+<script>
+const addModal = new bootstrap.Modal(document.getElementById('addEventModal'));
+
+function openAddModal() {
+  selectType('compra');
+  addModal.show();
+}
+
+function selectType(type) {
+  document.querySelectorAll('.type-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.type === type);
+  });
+  document.querySelectorAll('.event-form').forEach(f => f.classList.add('d-none'));
+
+  if (type === 'compra' || type === 'venda') {
+    document.getElementById('formTrade').classList.remove('d-none');
+    document.getElementById('tradeSide').value = type;
+    const btn = document.getElementById('tradeSaveBtn');
+    btn.textContent = '';
+    btn.innerHTML = `<i class="bi bi-check-circle me-1"></i>Salvar ${type.charAt(0).toUpperCase() + type.slice(1)}`;
+    btn.className = type === 'compra' ? 'btn btn-success btn-sm' : 'btn btn-danger btn-sm';
+  } else if (type === 'portabilidade') {
+    document.getElementById('formTransfer').classList.remove('d-none');
+  } else {
+    document.getElementById('formCorpEvent').classList.remove('d-none');
+  }
+}
+
+function toggleCorpFields(sel) {
+  const isBonificacao = sel.value === 'bonificacao';
+  document.getElementById('corpBonusQtyWrap').classList.toggle('d-none', !isBonificacao);
+  document.getElementById('corpBonusCostWrap').classList.toggle('d-none', !isBonificacao);
+  const isRenameOrIncorp = ['renomeacao','incorporacao'].includes(sel.value);
+  document.getElementById('corpTickerNewWrap').classList.toggle('d-none', !isRenameOrIncorp);
+  document.getElementById('corpFactorWrap').classList.toggle('d-none',
+    ['renomeacao','fusao_corretora','aquisicao_corretora'].includes(sel.value));
+}
+</script>
 
 {% endblock %}
