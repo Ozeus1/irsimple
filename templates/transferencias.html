@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="mb-1">Transferencias de Custodia</h1>
+<div class="d-flex align-items-center justify-content-between mb-1">
+  <h1 class="mb-0">Transferencias de Custodia</h1>
+  <button class="btn btn-outline-success btn-sm" data-bs-toggle="modal" data-bs-target="#importModal">
+    <i class="bi bi-upload me-1"></i> Importar CSV
+  </button>
+</div>
 <p class="text-muted mb-4">Registre portabilidades B3 entre corretoras. Essas informacoes atualizam a corretora das posicoes no calculo.</p>
 
 <div class="card shadow-sm mb-4">
@@ -213,6 +218,44 @@
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
           <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i>Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de importacao CSV -->
+<div class="modal fade" id="importModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form method="post" enctype="multipart/form-data">
+        <input type="hidden" name="action" value="import_csv">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-upload me-1"></i> Importar CSV</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small mb-2">O arquivo deve ter as colunas abaixo (primeira linha = cabecalho):</p>
+          <pre class="bg-light rounded p-2 small mb-3" style="font-size:.78rem">Data,Protocolo,Corretora Origem,Conta Origem,Corretora Destino,Conta Destino,Ticker,Tipo de Ativo,Quantidade,Status,Observacao</pre>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Arquivo CSV</label>
+            <input type="file" class="form-control form-control-sm" name="csv_file" accept=".csv,.txt" required>
+            <div class="form-text">Codificacao UTF-8 ou UTF-8 BOM. Separador virgula.</div>
+          </div>
+          <div class="alert alert-info py-2 mb-0 small">
+            <i class="bi bi-info-circle me-1"></i>
+            Registros duplicados (mesma data + ticker + protocolo) sao ignorados automaticamente.
+            A coluna <strong>Quantidade</strong> e opcional — se ausente, sera preenchida com 0.
+          </div>
+        </div>
+        <div class="modal-footer">
+          <a href="data:text/csv;charset=utf-8,Data%2CProtocolo%2CCorretora%20Origem%2CConta%20Origem%2CCorretora%20Destino%2CConta%20Destino%2CTicker%2CTipo%20de%20Ativo%2CQuantidade%2CStatus%2CObservacao%0A2025-04-22%2C%2320250422211542066363%2CGENIAL%20INSTITUCIONAL%20CCTVM%2C7639235%2CTORO%20CTVM%20SA%2C1613418%2CHYPE3%2CAcoes%20-%20ON%2C20%2CFinalizado%2CHYPERA%20S.A."
+             download="modelo_transferencias.csv"
+             class="btn btn-outline-secondary btn-sm me-auto">
+            <i class="bi bi-download me-1"></i> Baixar modelo
+          </a>
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button type="submit" class="btn btn-success btn-sm"><i class="bi bi-upload me-1"></i> Importar</button>
         </div>
       </form>
     </div>

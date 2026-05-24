@@ -1835,6 +1835,65 @@ def transferencias() -> str | Response:
     uid = current_user_id()
     if request.method == "POST":
         action = request.form.get("action", "add")
+        if action == "import_csv":
+            import csv, io
+            f = request.files.get("csv_file")
+            if not f or not f.filename:
+                flash("Nenhum arquivo selecionado.", "danger")
+                return redirect(url_for("transferencias"))
+            text = f.read().decode("utf-8-sig").strip()
+            reader = csv.DictReader(io.StringIO(text))
+            # normaliza cabecalhos: minusculo sem acentos/espacos
+            def _norm(s: str) -> str:
+                import unicodedata
+                s = unicodedata.normalize("NFD", s.lower().strip())
+                return "".join(c for c in s if unicodedata.category(c) != "Mn").replace(" ", "_").replace("/", "_")
+            inserted = 0
+            errors = []
+            with core.db_connect() as conn:
+                for i, row in enumerate(reader, start=2):
+                    nrow = {_norm(k): v.strip() for k, v in row.items() if k}
+                    ticker = nrow.get("ticker", "").upper().strip()
+                    date_val = nrow.get("data", "")
+                    if not ticker or not date_val:
+                        errors.append(f"Linha {i}: ticker ou data ausente.")
+                        continue
+                    qty = nrow.get("quantidade", nrow.get("qtd", "0")) or "0"
+                    # verifica duplicata
+                    proto = nrow.get("protocolo", nrow.get("protocolo_b3", ""))
+                    dup = conn.execute(
+                        "SELECT 1 FROM custody_transfers WHERE user_id=? AND transfer_date=? AND ticker=? AND protocol=?",
+                        (uid, date_val, ticker, proto),
+                    ).fetchone()
+                    if dup:
+                        errors.append(f"Linha {i}: {ticker} {date_val} ja existe (ignorado).")
+                        continue
+                    conn.execute(
+                        """INSERT INTO custody_transfers
+                           (user_id, transfer_date, protocol, broker_from, account_from,
+                            broker_to, account_to, ticker, asset_type, quantity, status, obs)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (
+                            uid,
+                            date_val,
+                            proto,
+                            nrow.get("corretora_origem", nrow.get("origem", "")),
+                            nrow.get("conta_origem", nrow.get("conta_orig.", "")),
+                            nrow.get("corretora_destino", nrow.get("destino", "")),
+                            nrow.get("conta_destino", nrow.get("conta_dest.", "")),
+                            ticker,
+                            nrow.get("tipo_de_ativo", nrow.get("tipo", "Acoes - ON")),
+                            qty,
+                            nrow.get("status", "finalizado").lower(),
+                            nrow.get("observacao", nrow.get("obs", "")),
+                        ),
+                    )
+                    inserted += 1
+            msg = f"{inserted} transferencia(s) importada(s)."
+            if errors:
+                msg += " Avisos: " + " | ".join(errors)
+            flash(msg, "success" if inserted > 0 else "warning")
+            return redirect(url_for("transferencias"))
         if action == "delete":
             item_id = int(request.form.get("item_id", 0))
             with core.db_connect() as conn:
